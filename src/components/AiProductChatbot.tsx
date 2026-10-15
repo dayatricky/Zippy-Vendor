@@ -21,9 +21,13 @@ import {
   Tag,
   Loader2,
   Wand2,
+  Mic,
+  MicOff,
+  Volume2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGetCategoriesQuery } from '@/store/api/vendorApi';
+import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorder';
 
 const isUUID = (str?: string) =>
   Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
@@ -215,6 +219,160 @@ export default function AiProductChatbot({
   } | null>(null);
   const [isAiUpdatingProduct, setIsAiUpdatingProduct] = useState(false);
   const [aiUpdatePrompt, setAiUpdatePrompt] = useState('');
+
+  // Voice Search States (MCP search_products_from_voice_tool)
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
+  const [voiceRecordingSession, setVoiceRecordingSession] = useState<VoiceRecordingSession | null>(null);
+  const voiceSessionRef = useRef<VoiceRecordingSession | null>(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  useEffect(() => {
+    let interval: any;
+    if (isRecordingVoice) {
+      interval = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setRecordingSeconds(0);
+    }
+    return () => clearInterval(interval);
+  }, [isRecordingVoice]);
+
+  const handleStopVoiceChat = async () => {
+    const session = voiceSessionRef.current || voiceRecordingSession;
+    if (!session) return;
+    voiceSessionRef.current = null;
+    setVoiceRecordingSession(null);
+    setIsRecordingVoice(false);
+    setIsVoiceProcessing(true);
+
+    const userMsgId = `voice-user-${Date.now()}`;
+    const botMsgId = `voice-bot-${Date.now()}`;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: userMsgId,
+        sender: 'user',
+        text: '🎙️ [Spoken Audio Query] Searching products by voice...',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
+
+    try {
+      const { base64 } = await session.stop();
+
+      const toastId = toast.loading('Searching products with MCP AI (search_products_from_voice_tool)...');
+
+      const response = await fetch('/api/ai/products/voice-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_base64: base64 }),
+      });
+
+      const data = await response.json();
+      toast.dismiss(toastId);
+
+      if (!data.success) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: botMsgId,
+            sender: 'assistant',
+            text: `⚠️ **Voice Search Error**: ${data.message || 'Could not understand audio. Please speak clearly and try again.'}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+        toast.error(data.message || 'Voice search failed');
+        return;
+      }
+
+      const results = data.results || [];
+      if (results.length === 0) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: botMsgId,
+            sender: 'assistant',
+            text: `🔍 **Voice Search Result**: No matching products found for the audio query. Try speaking specific product names like "Milk", "Bread", or "Butter".`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+        toast('No products found for voice audio', { icon: '🔍' });
+        return;
+      }
+
+      const mappedProducts: AiSuggestedProduct[] = results.map((r: any, idx: number) => {
+        const mrpNum = parseFloat(String(r.mrp)) || 40;
+        const priceNum = r.price ? Number(r.price) : Math.round(mrpNum * 0.9);
+        return {
+          id: r.id || `voice-${Date.now()}-${idx}`,
+          name: r.name,
+          category_name: r.category || r.category_name || 'General',
+          description: r.description || r.name,
+          key_features: r.key_features || [`Brand: ${r.brand_name || 'Generic'}`, `Unit: ${r.unit || '1 kg'}`],
+          price_range: `₹${priceNum} - ₹${mrpNum}`,
+          price: priceNum,
+          mrp: mrpNum,
+          unit: r.unit || '1 kg',
+          stock: r.stock_quantity || 20,
+          sku: r.sku,
+          image_url: r.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+          selected: true,
+          isAdded: false,
+          source: 'mcp-voice-search',
+        };
+      });
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: botMsgId,
+          sender: 'assistant',
+          text: `🎙️ **Voice Search Results** via Live MCP Tool (\`search_products_from_voice_tool\`):\nFound **${mappedProducts.length}** product(s) matching your spoken audio. You can review, update with AI Copilot, or register them directly to your catalog:`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          products: mappedProducts,
+        },
+      ]);
+
+      toast.success(`Found ${mappedProducts.length} product(s) from voice! 🎙️`);
+    } catch (err: any) {
+      console.error('Voice search failed:', err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: botMsgId,
+          sender: 'assistant',
+          text: `⚠️ **Voice Search Failed**: ${err.message || 'Network error occurred while calling MCP server.'}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      toast.error(err.message || 'Voice search request failed');
+    } finally {
+      setIsVoiceProcessing(false);
+    }
+  };
+
+  const handleStartVoiceChat = async () => {
+    try {
+      const session = await startVoiceRecording({
+        silenceTimeoutMs: 2000,
+        onSilenceDetected: () => {
+          toast('2s pause detected — searching voice now...', { icon: '⚡' });
+          handleStopVoiceChat();
+        },
+      });
+      voiceSessionRef.current = session;
+      setVoiceRecordingSession(session);
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+      toast('Listening... (auto-searches on 2s pause or click stop)', { icon: '🎙️' });
+    } catch (err: any) {
+      console.error('Voice chat mic error:', err);
+      toast.error(err.message || 'Could not access microphone.');
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -1122,9 +1280,41 @@ export default function AiProductChatbot({
               <Sparkles className="w-4 h-4 text-emerald-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
+            {/* Voice Search Button (MCP search_products_from_voice_tool) */}
+            {isRecordingVoice ? (
+              <button
+                type="button"
+                onClick={handleStopVoiceChat}
+                className="px-3.5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md flex items-center gap-1.5 animate-pulse cursor-pointer shrink-0"
+                title="Stop recording and search"
+              >
+                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                <span>00:0{recordingSeconds}s Stop</span>
+              </button>
+            ) : isVoiceProcessing ? (
+              <button
+                type="button"
+                disabled
+                className="px-3 py-3 bg-emerald-100 text-emerald-800 font-bold rounded-xl text-xs flex items-center gap-1.5 shrink-0"
+              >
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                <span className="hidden sm:inline">Searching...</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartVoiceChat}
+                disabled={isLoading}
+                className="p-3 bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 rounded-xl transition-all flex items-center justify-center shrink-0 cursor-pointer group"
+                title="Search products by voice (search_products_from_voice_tool)"
+              >
+                <Mic className="w-4 h-4 group-hover:scale-110 transition-transform" />
+              </button>
+            )}
+
             <button
               type="submit"
-              disabled={!inputValue.trim() || isLoading}
+              disabled={!inputValue.trim() || isLoading || isRecordingVoice}
               className="px-5 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-xl text-sm shadow-sm hover:shadow transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
               <Send className="w-4 h-4" />

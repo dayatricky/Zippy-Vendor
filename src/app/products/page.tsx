@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
 import {
   Package,
@@ -13,6 +13,10 @@ import {
   RefreshCw,
   AlertCircle,
   Sparkles,
+  Mic,
+  MicOff,
+  Loader2,
+  Volume2,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import {
@@ -25,6 +29,7 @@ import {
 } from '@/store/api/vendorApi';
 import Link from 'next/link';
 import AiProductChatbot, { AiSuggestedProduct } from '@/components/AiProductChatbot';
+import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorder';
 
 export default function ProductsPage() {
   const { products: localProducts, categories: localCategories, addProduct, updateProduct, deleteProduct, toggleProductAvailability, vendor, setStoreModalOpen } = useVendorStore();
@@ -54,6 +59,170 @@ export default function ProductsPage() {
   const [approvalError, setApprovalError] = useState('');
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
 
+  // Unified MCP Search State (supports both search_products_from_voice_tool and search_products_tool)
+  const [mcpSearchResults, setMcpSearchResults] = useState<{
+    source: 'voice' | 'text';
+    query?: string;
+    results: any[];
+  } | null>(null);
+
+  // Search execution states
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [isVoiceSearching, setIsVoiceSearching] = useState(false);
+  const [isTextSearching, setIsTextSearching] = useState(false);
+  const [voiceRecordingSession, setVoiceRecordingSession] = useState<VoiceRecordingSession | null>(null);
+  const sessionRef = useRef<VoiceRecordingSession | null>(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+
+  useEffect(() => {
+    let interval: any;
+    if (isRecordingVoice) {
+      interval = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setRecordingSeconds(0);
+    }
+    return () => clearInterval(interval);
+  }, [isRecordingVoice]);
+
+  const handleStopVoiceRecording = async () => {
+    const session = sessionRef.current || voiceRecordingSession;
+    if (!session) return;
+    sessionRef.current = null;
+    setVoiceRecordingSession(null);
+    setIsRecordingVoice(false);
+    setIsVoiceSearching(true);
+
+    try {
+      const { base64 } = await session.stop();
+
+      const toastId = toast.loading('Searching products from voice (search_products_from_voice_tool)...');
+
+      const res = await fetch('/api/ai/products/voice-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio_base64: base64 }),
+      });
+
+      const data = await res.json();
+      toast.dismiss(toastId);
+
+      if (!data.success) {
+        toast.error(data.message || 'Voice search could not recognize audio. Please try again.');
+        return;
+      }
+
+      const results = data.results || [];
+      const topTerm = results.length > 0 ? results[0].name : 'Voice Search';
+      setMcpSearchResults({
+        source: 'voice',
+        query: topTerm,
+        results: results,
+      });
+
+      if (results.length > 0) {
+        toast.success(`Found ${results.length} product(s) via Voice Search!`, { icon: '🎙️' });
+      } else {
+        toast('No matching products found for spoken audio.', { icon: '🔍' });
+      }
+    } catch (err: any) {
+      console.error('Voice search failed:', err);
+      toast.error(err.message || 'Voice search request failed.');
+    } finally {
+      setIsVoiceSearching(false);
+    }
+  };
+
+  const handleStartVoiceRecording = async () => {
+    try {
+      setApprovalError('');
+      const session = await startVoiceRecording({
+        silenceTimeoutMs: 2000, // 2-second silence detection: automatic search!
+        onSilenceDetected: () => {
+          toast('2s pause detected — searching voice now...', { icon: '⚡' });
+          handleStopVoiceRecording();
+        },
+      });
+      sessionRef.current = session;
+      setVoiceRecordingSession(session);
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+      toast('Listening... Speak product name (auto-searches on 2s pause or click stop)', { icon: '🎙️' });
+    } catch (err: any) {
+      console.error('Microphone access error:', err);
+      toast.error(err.message || 'Could not access microphone.');
+    }
+  };
+
+  // MCP Text Search using search_products_tool
+  const handleTextSearchSubmit = async (queryText?: string) => {
+    const q = (queryText !== undefined ? queryText : searchTerm).trim();
+    if (!q) {
+      handleClearSearchFilter();
+      return;
+    }
+
+    setIsTextSearching(true);
+    const toastId = toast.loading(`Searching MCP catalog for "${q}"...`);
+    try {
+      const res = await fetch('/api/ai/products/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_message: q }),
+      });
+      const data = await res.json();
+      toast.dismiss(toastId);
+
+      if (!data.success) {
+        toast.error(data.message || 'Search failed.');
+        return;
+      }
+
+      const results = data.results || [];
+      setMcpSearchResults({
+        source: 'text',
+        query: q,
+        results: results,
+      });
+
+      if (results.length > 0) {
+        toast.success(`Found ${results.length} product(s) for "${q}"!`, { icon: '🔍' });
+      } else {
+        toast(`No products found for "${q}".`, { icon: '🔍' });
+      }
+    } catch (err: any) {
+      toast.dismiss(toastId);
+      console.error('MCP text search failed:', err);
+      toast.error(err.message || 'Search request failed.');
+    } finally {
+      setIsTextSearching(false);
+    }
+  };
+
+  const handleAddVoiceResultToCatalog = (item: any) => {
+    if (!isApproved) {
+      setApprovalError(`Store approval is required to add products to inventory. Current status: ${currentStatus || 'NOT_REGISTERED'}`);
+      return;
+    }
+    const matchingCat = categoriesList.find((c: any) => c.name.toLowerCase() === (item.category || '').toLowerCase()) || categoriesList[0];
+    const mrp = parseFloat(String(item.mrp)) || 40;
+    const price = item.price ? Number(item.price) : Math.round(mrp * 0.9);
+
+    setNewProduct({
+      name: item.name || '',
+      price: String(price),
+      mrp: String(mrp),
+      categoryId: matchingCat?.id || '',
+      categoryName: matchingCat?.name || item.category || 'General',
+      stock: String(item.stock_quantity || 20),
+      unit: item.unit || '1 kg',
+      image: item.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+    });
+    setApprovalError('');
+    setIsModalOpen(true);
+  };
+
   // RTK Query API hooks matching Swagger Specs
   const {
     data: productsApiData,
@@ -63,6 +232,16 @@ export default function ProductsPage() {
     refetch: refetchProducts,
   } = useGetProductsQuery({ search: searchTerm });
   const { data: categoriesApiData, refetch: refetchCategories } = useGetCategoriesQuery();
+
+  const handleClearSearchFilter = () => {
+    setMcpSearchResults(null);
+    setSearchTerm('');
+    setSelectedCategory('All');
+    try {
+      refetchProducts();
+    } catch {}
+    toast('Filter cleared — showing all products from store API', { icon: '🔄' });
+  };
   const [addProductApi] = useAddProductMutation();
   const [updateProductApi] = useUpdateProductMutation();
   const [deleteProductApi] = useDeleteProductMutation();
@@ -186,11 +365,50 @@ export default function ProductsPage() {
 
   const categoriesPills = ['All', ...Array.from(new Set(categoriesList.map((c: any) => c.name)))];
 
-  const filteredProducts = displayProducts.filter((p: any) => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  // When search is active (voice or text), ONLY show the products returned by the search response!
+  // When cleared, show all products from the Store API!
+  const displayedProductsList = useMemo(() => {
+    if (mcpSearchResults !== null) {
+      return mcpSearchResults.results.map((item: any, idx: number) => {
+        const existingInStore = displayProducts.find(
+          (dp: any) =>
+            (item.id && dp.id && String(item.id) === String(dp.id)) ||
+            dp.name.toLowerCase() === (item.name || '').toLowerCase()
+        );
+
+        const mrpNum = parseFloat(String(item.mrp)) || 40;
+        const priceNum = item.price ? Number(item.price) : Math.round(mrpNum * 0.9);
+
+        return {
+          id: existingInStore ? existingInStore.id : item.id || `mcp-prod-${idx}`,
+          name: item.name || 'Product',
+          price: existingInStore ? existingInStore.price : priceNum,
+          mrp: existingInStore ? existingInStore.mrp : mrpNum,
+          image: existingInStore?.image || item.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+          category: existingInStore?.category || item.category || 'General',
+          categoryId: existingInStore?.categoryId,
+          stock: existingInStore?.stock ?? item.stock_quantity ?? 10,
+          isAvailable: existingInStore ? existingInStore.isAvailable : true,
+          unit: existingInStore?.unit || item.unit || '1 kg',
+          isExistingInStore: Boolean(existingInStore),
+          rawItemData: item,
+        };
+      });
+    }
+
+    // Normal view: from original Store API
+    return displayProducts
+      .filter((p: any) => {
+        const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
+        const matchesSearch = searchTerm ? p.name.toLowerCase().includes(searchTerm.toLowerCase()) : true;
+        return matchesCategory && matchesSearch;
+      })
+      .map((p: any) => ({
+        ...p,
+        isExistingInStore: true,
+        rawItemData: p,
+      }));
+  }, [mcpSearchResults, displayProducts, selectedCategory, searchTerm]);
 
   const isUUID = (str?: string) => Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
 
@@ -452,36 +670,183 @@ export default function ProductsPage() {
       )}
 
       {/* Filter & Search Bar */}
-      <div className="white-card p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
-        {/* Search Bar */}
-        <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search items by name..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="custom-input w-full pl-10 pr-4 py-2.5 text-sm"
-          />
+      <div className="space-y-3">
+        <div className="white-card p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
+          {/* Search Bar with Integrated Voice and Text Search via MCP */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleTextSearchSubmit();
+            }}
+            className="relative w-full md:w-96 flex items-center"
+          >
+            <button
+              type="submit"
+              className="p-1.5 text-slate-400 hover:text-emerald-700 absolute left-2.5 top-1/2 -translate-y-1/2 cursor-pointer transition-colors"
+              title="Search products (search_products_tool)"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            <input
+              type="text"
+              placeholder={
+                isRecordingVoice
+                  ? 'Listening... (auto-searches on 2s silence)'
+                  : 'Search items or click mic for voice...'
+              }
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              disabled={isRecordingVoice}
+              className="custom-input w-full pl-10 pr-28 py-2.5 text-sm"
+            />
+            {/* Search Controls inside Search Input */}
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              {isRecordingVoice ? (
+                <button
+                  type="button"
+                  onClick={handleStopVoiceRecording}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold animate-pulse shadow-xs cursor-pointer"
+                  title="Click to stop immediately (or pause 2s to auto-search)"
+                >
+                  <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                  <span>00:0{recordingSeconds}s Stop</span>
+                </button>
+              ) : isVoiceSearching || isTextSearching ? (
+                <div className="p-1.5 text-emerald-600 flex items-center gap-1 text-xs font-semibold">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleStartVoiceRecording}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer group"
+                  title="Search by voice (search_products_from_voice_tool) - auto-searches on 2s pause"
+                >
+                  <Mic className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                </button>
+              )}
+
+              {searchTerm && !mcpSearchResults && !isRecordingVoice && (
+                <button
+                  type="submit"
+                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-md shadow-xs cursor-pointer transition-all"
+                  title="Search via MCP tool"
+                >
+                  Search
+                </button>
+              )}
+
+              {(searchTerm || mcpSearchResults !== null || selectedCategory !== 'All') && (
+                <button
+                  type="button"
+                  onClick={handleClearSearchFilter}
+                  className="px-2 py-1 rounded-md text-xs font-bold text-slate-500 hover:text-emerald-800 hover:bg-slate-100 transition-colors cursor-pointer flex items-center gap-1"
+                  title="Clear Filter (Show All Products)"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Clear</span>
+                </button>
+              )}
+            </div>
+          </form>
+
+          {/* Category Pills */}
+          <div className="flex items-center space-x-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
+            <Filter className="w-4 h-4 text-slate-400 shrink-0 hidden sm:block" />
+            {categoriesPills.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  selectedCategory === cat
+                    ? 'bg-[#167a46] text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Category Pills */}
-        <div className="flex items-center space-x-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-none">
-          <Filter className="w-4 h-4 text-slate-400 shrink-0 hidden sm:block" />
-          {categoriesPills.map((cat) => (
+        {/* Live Voice Recording Status Banner with 2-second Silence Notice */}
+        {isRecordingVoice && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in-50">
+            <div className="flex items-center gap-2.5">
+              <span className="w-3 h-3 rounded-full bg-rose-600 animate-ping shrink-0" />
+              <div>
+                <p className="text-xs font-bold text-rose-950">
+                  🎙️ Recording Voice... Speak clearly into your microphone
+                </p>
+                <p className="text-[11px] text-rose-700">
+                  Speak product name (e.g. &ldquo;Milk&rdquo;, &ldquo;Amul Taaza Milk&rdquo;). <strong>Auto-searches after 2-second pause</strong>, or click Stop anytime!
+                </p>
+              </div>
+            </div>
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                selectedCategory === cat
-                  ? 'bg-[#167a46] text-white shadow-sm'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
+              type="button"
+              onClick={handleStopVoiceRecording}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
             >
-              {cat}
+              Stop &amp; Search Now (00:0{recordingSeconds}s) ➔
             </button>
-          ))}
-        </div>
+          </div>
+        )}
+
+        {/* Live Search Processing Status Banner */}
+        {(isVoiceSearching || isTextSearching) && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl p-3.5 flex items-center gap-3 shadow-xs animate-pulse">
+            <Loader2 className="w-5 h-5 text-emerald-600 animate-spin shrink-0" />
+            <div>
+              <p className="text-xs font-bold text-emerald-950">
+                Searching MCP Server Catalog...
+              </p>
+              <p className="text-[11px] text-emerald-700 font-mono">
+                {isVoiceSearching
+                  ? 'Tool: search_products_from_voice_tool @ 192.168.1.75:8000/mcp'
+                  : 'Tool: search_products_tool @ 192.168.1.75:8000/mcp'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Active Search Results Banner (Voice or Text) */}
+        {mcpSearchResults !== null && (
+          <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in-50">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                {mcpSearchResults.source === 'voice' ? (
+                  <Mic className="w-5 h-5 animate-pulse" />
+                ) : (
+                  <Search className="w-5 h-5" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm text-emerald-950">
+                    {mcpSearchResults.source === 'voice' ? 'Voice Search Response' : 'Search Response'}: ({displayedProductsList.length} items found)
+                  </span>
+                  <span className="text-[10px] bg-emerald-200 text-emerald-900 font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-300">
+                    {mcpSearchResults.source === 'voice'
+                      ? 'search_products_from_voice_tool'
+                      : 'search_products_tool'}
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-800 mt-0.5 font-medium">
+                  Showing ONLY the products returned from the MCP search response for: <strong>&ldquo;{mcpSearchResults.query}&rdquo;</strong>
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearSearchFilter}
+              className="text-xs font-bold text-emerald-900 bg-white border border-emerald-400 hover:bg-emerald-100 px-4 py-2 rounded-xl transition-all shadow-xs shrink-0 cursor-pointer flex items-center gap-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>✕ Clear Filter (Show All Products)</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Products Grid */}
@@ -490,7 +855,7 @@ export default function ProductsPage() {
           <RefreshCw className="w-8 h-8 text-[#167a46] animate-spin mx-auto" />
           <p className="text-xs font-bold text-slate-600">Loading products...</p>
         </div>
-      ) : filteredProducts.length === 0 ? (
+      ) : displayedProductsList.length === 0 ? (
         <div className="p-16 text-center bg-white rounded-2xl border border-dashed border-slate-200 space-y-4">
           <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
             <Package className="w-8 h-8" />
@@ -498,14 +863,24 @@ export default function ProductsPage() {
           <div>
             <h3 className="text-base font-bold text-slate-800">No Products Found</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-              {searchTerm
+              {mcpSearchResults !== null
+                ? `No matching products were returned from MCP for "${mcpSearchResults.query}".`
+                : searchTerm
                 ? `No products matched "${searchTerm}".`
                 : selectedCategory !== 'All'
                 ? `No products found in category "${selectedCategory}".`
-                : 'No products have been added to your store inventory yet.'}
+                : 'No products in your store inventory yet.'}
             </p>
           </div>
-          {!searchTerm && (
+          {mcpSearchResults !== null || searchTerm || selectedCategory !== 'All' ? (
+            <button
+              onClick={handleClearSearchFilter}
+              className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all shadow-sm cursor-pointer mx-auto"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Clear Filter &amp; Show All Products</span>
+            </button>
+          ) : (
             <button
               onClick={handleAddProductClick}
               className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white font-bold text-xs transition-all shadow-sm cursor-pointer mx-auto"
@@ -517,36 +892,60 @@ export default function ProductsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProducts.map((product) => (
+          {displayedProductsList.map((product) => (
             <div
               key={product.id}
               className={`white-card p-5 space-y-4 relative overflow-hidden transition-all flex flex-col justify-between shadow-sm border ${
-                !product.isAvailable ? 'opacity-70 border-rose-200 bg-rose-50/20' : 'border-slate-200'
+                product.isExistingInStore === false
+                  ? 'border-emerald-300 bg-emerald-50/15'
+                  : !product.isAvailable
+                  ? 'opacity-70 border-rose-200 bg-rose-50/20'
+                  : 'border-slate-200'
               }`}
             >
               <div className="space-y-3">
-                {/* Image & Stock Badge */}
+                {/* Image & Badges */}
                 <div className="relative h-44 w-full rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
                   <img
                     src={product.image}
                     alt={product.name}
                     className="w-full h-full object-cover"
+                    onError={(e: any) => {
+                      e.target.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
+                    }}
                   />
-                  <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-[#167a46]">
+                  <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-[#167a46]">
                     {product.category}
                   </div>
 
+                  {mcpSearchResults !== null && (
+                    <div className="absolute bottom-3 left-3 bg-emerald-600 text-white backdrop-blur-md px-2.5 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 shadow-xs border border-emerald-500">
+                      {mcpSearchResults.source === 'voice' ? (
+                        <Mic className="w-3 h-3" />
+                      ) : (
+                        <Search className="w-3 h-3" />
+                      )}
+                      <span>Response Item</span>
+                    </div>
+                  )}
+
                   {/* Availability Badge */}
                   <div className="absolute top-3 right-3">
-                    <span
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md ${
-                        product.isAvailable
-                          ? 'bg-emerald-600 border-emerald-500 text-white'
-                          : 'bg-rose-600 border-rose-500 text-white'
-                      }`}
-                    >
-                      {product.isAvailable ? 'IN STOCK' : 'OUT OF STOCK'}
-                    </span>
+                    {product.isExistingInStore === false ? (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md bg-amber-500 border-amber-400 text-white">
+                        MCP CATALOG
+                      </span>
+                    ) : (
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md ${
+                          product.isAvailable
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : 'bg-rose-600 border-rose-500 text-white'
+                        }`}
+                      >
+                        {product.isAvailable ? 'IN STOCK' : 'OUT OF STOCK'}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -566,41 +965,56 @@ export default function ProductsPage() {
                 </div>
               </div>
 
-              {/* Card Bottom Actions: Edit, Delete & In-Stock Switch */}
+              {/* Card Bottom Actions */}
               <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                <div className="flex items-center space-x-1">
-                  <button
-                    onClick={() => handleEditProductClick(product)}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-[#167a46] hover:bg-emerald-50 transition-colors flex items-center space-x-1 text-xs font-semibold cursor-pointer"
-                    title="Edit Product"
-                  >
-                    <Edit className="w-4 h-4" />
-                    <span>Edit</span>
-                  </button>
-                  <button
-                    onClick={() => handleDeleteProduct(product.id)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                    title="Delete Product"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                {product.isExistingInStore === false ? (
+                  <div className="w-full flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-emerald-800">Not in Inventory</span>
+                    <button
+                      onClick={() => handleAddVoiceResultToCatalog(product.rawItemData || product)}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add to Store</span>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => handleEditProductClick(product)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#167a46] hover:bg-emerald-50 transition-colors flex items-center space-x-1 text-xs font-semibold cursor-pointer"
+                        title="Edit Product"
+                      >
+                        <Edit className="w-4 h-4" />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteProduct(product.id)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        title="Delete Product"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
 
-                <div className="flex items-center space-x-2">
-                  <span className="text-[11px] font-semibold text-slate-500">In-Stock:</span>
-                  <button
-                    onClick={() => handleToggleAvailability(product.id, product.isAvailable)}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
-                      product.isAvailable ? 'bg-[#167a46]' : 'bg-slate-300'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
-                        product.isAvailable ? 'translate-x-4' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-[11px] font-semibold text-slate-500">In-Stock:</span>
+                      <button
+                        onClick={() => handleToggleAvailability(product.id, product.isAvailable)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
+                          product.isAvailable ? 'bg-[#167a46]' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
+                            product.isAvailable ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           ))}

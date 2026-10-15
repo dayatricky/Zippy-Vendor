@@ -308,3 +308,223 @@ export async function callMcpUpdateProductTool(
   }
 }
 
+export interface McpVoiceSearchResult {
+  id?: string;
+  name: string;
+  category?: string;
+  description?: string;
+  mrp?: string | number;
+  price?: number;
+  brand_name?: string;
+  sku?: string;
+  unit?: string;
+  store_id?: string;
+  stock_quantity?: number;
+  image_url?: string;
+}
+
+function extractVoiceSearchResults(payload: any): McpVoiceSearchResult[] {
+  if (!payload) return [];
+
+  // Check structuredContent.results
+  if (payload.structuredContent?.results && Array.isArray(payload.structuredContent.results)) {
+    return payload.structuredContent.results;
+  }
+  if (Array.isArray(payload.structuredContent)) {
+    return payload.structuredContent;
+  }
+
+  // Check result.results
+  if (payload.result?.results && Array.isArray(payload.result.results)) {
+    return payload.result.results;
+  }
+  if (payload.result?.structuredContent?.results && Array.isArray(payload.result.structuredContent.results)) {
+    return payload.result.structuredContent.results;
+  }
+
+  // Check text content inside content array
+  if (Array.isArray(payload.content)) {
+    for (const item of payload.content) {
+      if (item.text) {
+        try {
+          const parsed = JSON.parse(item.text);
+          if (Array.isArray(parsed.results)) return parsed.results;
+          if (Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+    }
+  }
+
+  return [];
+}
+
+function extractVoiceSearchError(payload: any): string | null {
+  if (!payload) return null;
+  if (payload.structuredContent?.error) return String(payload.structuredContent.error);
+  if (payload.result?.structuredContent?.error) return String(payload.result.structuredContent.error);
+  if (payload.error?.message) return String(payload.error.message);
+  if (Array.isArray(payload.content)) {
+    for (const item of payload.content) {
+      if (item.text) {
+        try {
+          const parsed = JSON.parse(item.text);
+          if (parsed.error) return String(parsed.error);
+        } catch {}
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Calls search_products_from_voice_tool on the live MCP Server
+ * passing audio_base64 to search products matching spoken audio
+ */
+export async function callMcpVoiceSearchTool(audioBase64: string): Promise<McpVoiceSearchResult[]> {
+  const mcpUrl = getMcpUrl();
+
+  let sessionId = cachedSessionId;
+  if (!sessionId) {
+    sessionId = await initializeMcpSession(mcpUrl);
+  }
+
+  const executeCall = async (sessId: string | null) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    };
+    if (sessId) {
+      headers['mcp-session-id'] = sessId;
+    }
+
+    const response = await fetch(mcpUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: {
+          name: 'search_products_from_voice_tool',
+          arguments: {
+            audio_base64: audioBase64,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    const newSession = response.headers.get('mcp-session-id');
+    if (newSession) cachedSessionId = newSession;
+
+    const rawText = await response.text();
+    return parseMcpPayload(rawText);
+  };
+
+  try {
+    let payload = await executeCall(sessionId);
+
+    // If session expired or missing, retry once
+    if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
+      cachedSessionId = await initializeMcpSession(mcpUrl);
+      payload = await executeCall(cachedSessionId);
+    }
+
+    const errorMsg = extractVoiceSearchError(payload);
+    if (errorMsg) {
+      throw new Error(errorMsg);
+    }
+
+    const rawResults = extractVoiceSearchResults(payload);
+    return rawResults.map((p) => {
+      const numMrp = parseFloat(String(p.mrp)) || 40;
+      const numPrice = p.price ? Number(p.price) : Math.round(numMrp * 0.9);
+      return {
+        ...p,
+        mrp: numMrp,
+        price: numPrice,
+      };
+    });
+  } catch (err: any) {
+    console.error('[MCP] search_products_from_voice_tool call error:', err);
+    throw new Error(err.message || 'Voice search call failed');
+  }
+}
+
+/**
+ * Calls search_products_tool on the live MCP Server
+ * passing user_message to search products matching text query
+ */
+export async function callMcpSearchProductsTool(userMessage: string): Promise<McpVoiceSearchResult[]> {
+  const mcpUrl = getMcpUrl();
+
+  let sessionId = cachedSessionId;
+  if (!sessionId) {
+    sessionId = await initializeMcpSession(mcpUrl);
+  }
+
+  const executeCall = async (sessId: string | null) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    };
+    if (sessId) {
+      headers['mcp-session-id'] = sessId;
+    }
+
+    const response = await fetch(mcpUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: {
+          name: 'search_products_tool',
+          arguments: {
+            user_message: userMessage,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    const newSession = response.headers.get('mcp-session-id');
+    if (newSession) cachedSessionId = newSession;
+
+    const rawText = await response.text();
+    return parseMcpPayload(rawText);
+  };
+
+  try {
+    let payload = await executeCall(sessionId);
+
+    // If session expired or missing, retry once
+    if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
+      cachedSessionId = await initializeMcpSession(mcpUrl);
+      payload = await executeCall(cachedSessionId);
+    }
+
+    const errorMsg = extractVoiceSearchError(payload);
+    if (errorMsg) {
+      throw new Error(errorMsg);
+    }
+
+    const rawResults = extractVoiceSearchResults(payload);
+    return rawResults.map((p) => {
+      const numMrp = parseFloat(String(p.mrp)) || 40;
+      const numPrice = p.price ? Number(p.price) : Math.round(numMrp * 0.9);
+      return {
+        ...p,
+        mrp: numMrp,
+        price: numPrice,
+      };
+    });
+  } catch (err: any) {
+    console.error('[MCP] search_products_tool call error:', err);
+    throw new Error(err.message || 'Product text search call failed');
+  }
+}
+
+
+
