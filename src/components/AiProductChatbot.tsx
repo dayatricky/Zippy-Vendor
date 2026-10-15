@@ -17,12 +17,40 @@ import {
   SlidersHorizontal,
   Info,
   ExternalLink,
+  Edit,
+  Tag,
+  Loader2,
+  Wand2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGetCategoriesQuery } from '@/store/api/vendorApi';
 
 const isUUID = (str?: string) =>
   Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
+
+const formatPriceRangeDisplay = (range?: string): string => {
+  if (!range) return '';
+  if (range.includes('$') || /usd|dollar/i.test(range)) {
+    return range
+      .replace(/\$\s*(\d+(?:\.\d+)?)/g, (_, val) => {
+        const inr = Math.round(parseFloat(val) * 85);
+        return `₹${inr}`;
+      })
+      .replace(/usd|dollar/gi, '₹');
+  }
+  if (/^\d/.test(range)) {
+    return `₹${range.replace(/\s*-\s*/, ' - ₹')}`;
+  }
+  return range;
+};
+
+const formatMessageTextWithRupees = (text?: string): string => {
+  if (!text) return '';
+  return text.replace(/\$\s*(\d+(?:\.\d+)?)/g, (_, val) => {
+    const inr = Math.round(parseFloat(val) * 85);
+    return `₹${inr}`;
+  });
+};
 
 export interface AiSuggestedProduct {
   name: string;
@@ -177,6 +205,16 @@ export default function AiProductChatbot({
   const [mcpServerStatus, setMcpServerStatus] = useState<string>('Live MCP Server (192.168.1.75:8000/mcp)');
   const [addingIds, setAddingIds] = useState<Record<string, boolean>>({});
   const [batchAdding, setBatchAdding] = useState(false);
+  const [editingProductData, setEditingProductData] = useState<{
+    msgId: string;
+    prodIndex: number;
+    product: AiSuggestedProduct;
+    newFeatureInput?: string;
+    mode?: 'ai' | 'manual';
+    hasAiUpdated?: boolean;
+  } | null>(null);
+  const [isAiUpdatingProduct, setIsAiUpdatingProduct] = useState(false);
+  const [aiUpdatePrompt, setAiUpdatePrompt] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -190,11 +228,101 @@ export default function AiProductChatbot({
     }
   }, [messages, isOpen]);
 
+  const handleSaveFullProduct = () => {
+    if (!editingProductData) return;
+    const { msgId, prodIndex, product } = editingProductData;
+    setMessages((prev) =>
+      prev.map((msg) => {
+        if (msg.id !== msgId || !msg.products) return msg;
+        const updatedProds = [...msg.products];
+        updatedProds[prodIndex] = {
+          ...product,
+          price_range: `₹${product.price} - ₹${product.mrp}`,
+        };
+        return { ...msg, products: updatedProds };
+      })
+    );
+    setEditingProductData(null);
+    toast.success('✓ Product verified and saved successfully!');
+  };
+
+  const handleAiUpdateProductInModal = async (customPrompt?: string) => {
+    if (!editingProductData || isAiUpdatingProduct) return;
+    const promptText = (customPrompt || aiUpdatePrompt).trim();
+    if (!promptText) {
+      toast.error('Please enter instructions for the AI');
+      return;
+    }
+
+    setIsAiUpdatingProduct(true);
+    const toastId = toast.loading('Calling MCP AI (update_product_detail_tool)...');
+    try {
+      const currentProd = editingProductData.product;
+      const response = await fetch('/api/ai/products/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_message: promptText,
+          product_detail: {
+            product_name: currentProd.name,
+            category: currentProd.category_name,
+            description: currentProd.description,
+            key_features: currentProd.key_features || [],
+            price_range: currentProd.price_range || `₹${currentProd.price} - ₹${currentProd.mrp}`,
+            price: currentProd.price,
+            mrp: currentProd.mrp,
+            image_url: currentProd.image_url,
+          },
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.product) {
+        throw new Error(data.message || 'Failed to update product via MCP Server');
+      }
+
+      const updated = data.product;
+      setEditingProductData((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          product: {
+            ...prev.product,
+            name: updated.name || prev.product.name,
+            category_name: updated.category_name || prev.product.category_name,
+            description: updated.description || prev.product.description,
+            key_features:
+              Array.isArray(updated.key_features) && updated.key_features.length > 0
+                ? updated.key_features
+                : prev.product.key_features,
+            price: typeof updated.price === 'number' && updated.price > 0 ? updated.price : prev.product.price,
+            mrp: typeof updated.mrp === 'number' && updated.mrp > 0 ? updated.mrp : prev.product.mrp,
+            price_range: updated.price_range || `₹${updated.price || prev.product.price} - ₹${updated.mrp || prev.product.mrp}`,
+            image_url: updated.image_url || prev.product.image_url,
+          },
+          hasAiUpdated: true,
+        };
+      });
+
+      toast.success(`✨ Changes generated via AI! Verify below and click "Verify and Save".`, { id: toastId });
+      setAiUpdatePrompt('');
+    } catch (err: any) {
+      console.error('AI update error:', err);
+      toast.error(err.message || 'Failed to update product via AI', { id: toastId });
+    } finally {
+      setIsAiUpdatingProduct(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const handleSendMessage = async (queryText?: string) => {
     const textToSend = (queryText || inputValue).trim();
     if (!textToSend || isLoading) return;
+
+    // Get the latest products from the chat to support conversational refinement / editing
+    const latestProductMsg = [...messages].reverse().find((m) => m.products && m.products.length > 0);
+    const currentProducts = latestProductMsg?.products || [];
 
     const userMsgId = `user-${Date.now()}`;
     const newMessages: ChatMessage[] = [
@@ -218,6 +346,7 @@ export default function AiProductChatbot({
         body: JSON.stringify({
           message: textToSend,
           categories: activeCategories,
+          currentProducts,
         }),
       });
 
@@ -232,8 +361,26 @@ export default function AiProductChatbot({
           // Match category ID from store Category API
           const matchedCategory = findBestCategory(p.category_name || '', p.name || '');
 
+          let price = Number(p.price) || 0;
+          let mrp = Number(p.mrp) || 0;
+          let priceRange = formatPriceRangeDisplay(p.price_range);
+
+          // Extra safety: convert any leftover dollar pricing to Rupees
+          if (
+            (p.price_range && (p.price_range.includes('$') || /usd|dollar/i.test(p.price_range))) ||
+            (price > 0 && price <= 25 && mrp <= 25)
+          ) {
+            if (price <= 25) price = Math.round(price * 85);
+            if (mrp <= 25) mrp = Math.round(mrp * 85);
+            if (mrp <= price) mrp = Math.round(price * 1.15) || price + 10;
+            priceRange = `₹${price} - ₹${mrp}`;
+          }
+
           return {
             ...p,
+            price,
+            mrp,
+            price_range: priceRange,
             category_id: matchedCategory?.id || p.category_id || activeCategories[0]?.id || '',
             category_name: matchedCategory?.name || p.category_name || activeCategories[0]?.name || 'Grocery',
             selected: true,
@@ -568,7 +715,9 @@ export default function AiProductChatbot({
                       : 'bg-white border border-slate-200 text-slate-800 rounded-tl-none'
                   }`}
                 >
-                  <div className="whitespace-pre-line leading-relaxed font-sans">{msg.text}</div>
+                  <div className="whitespace-pre-line leading-relaxed font-sans">
+                    {formatMessageTextWithRupees(msg.text)}
+                  </div>
                   <div
                     className={`text-[10px] mt-1.5 text-right ${
                       msg.sender === 'user' ? 'text-slate-400' : 'text-slate-400'
@@ -688,7 +837,7 @@ export default function AiProductChatbot({
                                     </span>
                                   ) : prod.price_range ? (
                                     <span className="shrink-0 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                                      {prod.price_range}
+                                      {formatPriceRangeDisplay(prod.price_range)}
                                     </span>
                                   ) : (
                                     <span className="shrink-0 text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
@@ -813,6 +962,49 @@ export default function AiProductChatbot({
 
                                 {/* Action Buttons per Item */}
                                 <div className="mt-2.5 flex items-center justify-end space-x-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingProductData({
+                                        msgId: msg.id,
+                                        prodIndex: pIdx,
+                                        product: {
+                                          ...prod,
+                                          key_features: prod.key_features ? [...prod.key_features] : [],
+                                        },
+                                        newFeatureInput: '',
+                                        mode: 'ai',
+                                      });
+                                      setAiUpdatePrompt('Update the product description so it looks like a premium product');
+                                    }}
+                                    className="text-xs px-2.5 py-1 text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-md font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                    title="Edit with AI using live MCP update_product_detail_tool"
+                                  >
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>AI Edit</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingProductData({
+                                        msgId: msg.id,
+                                        prodIndex: pIdx,
+                                        product: {
+                                          ...prod,
+                                          key_features: prod.key_features ? [...prod.key_features] : [],
+                                        },
+                                        newFeatureInput: '',
+                                        mode: 'manual',
+                                      })
+                                    }
+                                    className="text-xs px-2.5 py-1 text-slate-700 hover:text-emerald-700 bg-white hover:bg-emerald-50 border border-slate-200 rounded-md font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                                    title="Edit description, key features, image, pricing & stock manually"
+                                  >
+                                    <Edit className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Edit Details</span>
+                                  </button>
+
                                   {onOpenManualModal && !prod.isAdded && (
                                     <button
                                       type="button"
@@ -850,6 +1042,41 @@ export default function AiProductChatbot({
                           </div>
                         );
                       })}
+                    </div>
+
+                    {/* Quick AI Refine Chips */}
+                    <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px]">
+                      <span className="text-slate-400 font-semibold shrink-0 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-amber-500" /> Quick AI Edits:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage('Apply 10% discount across all products')}
+                        className="shrink-0 px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 rounded-lg font-medium transition-all cursor-pointer"
+                      >
+                        💰 10% Off All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage('Set MRP 20% higher than selling price for all items')}
+                        className="shrink-0 px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 rounded-lg font-medium transition-all cursor-pointer"
+                      >
+                        🏷️ 20% Margin
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage('Set stock quantity to 100 for all products')}
+                        className="shrink-0 px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 rounded-lg font-medium transition-all cursor-pointer"
+                      >
+                        📦 Stock: 100
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage('Make product descriptions more catchy & premium')}
+                        className="shrink-0 px-2.5 py-1 bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 rounded-lg font-medium transition-all cursor-pointer"
+                      >
+                        ✨ Catchy Descriptions
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -911,6 +1138,592 @@ export default function AiProductChatbot({
           </div>
         </div>
       </div>
+
+      {/* Full In-Chat Product Edit Modal */}
+      {editingProductData && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in-50">
+          {editingProductData.mode === 'ai' ? (
+            /* Dedicated AI Product Editor Modal (MCP Live: update_product_detail_tool) */
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white flex items-center justify-center shadow-xs">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                      <span>AI Product Copilot</span>
+                      <span className="text-[10px] font-mono font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded">
+                        update_product_detail_tool
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500">Live MCP Server (192.168.1.75:8000/mcp)</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingProductData(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Target Product Summary Card */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-white">
+                  <img
+                    src={editingProductData.product.image_url}
+                    alt={editingProductData.product.name}
+                    className="w-full h-full object-cover"
+                    onError={(e: any) => {
+                      e.target.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=200&q=80';
+                    }}
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="font-bold text-sm text-slate-800 truncate">
+                      {editingProductData.product.name}
+                    </h4>
+                    <span className="shrink-0 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      ₹{editingProductData.product.price} - ₹{editingProductData.product.mrp}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Category: <span className="text-slate-700 font-semibold">{editingProductData.product.category_name}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Large AI Instruction Box */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Tell AI what to update or rewrite</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">
+                    MCP Live Tool
+                  </span>
+                </label>
+
+                <textarea
+                  rows={4}
+                  value={aiUpdatePrompt}
+                  onChange={(e) => setAiUpdatePrompt(e.target.value)}
+                  placeholder="e.g. Update product description so it looks like a premium product, add organic certified highlights, and suggest competitive Indian Rupee pricing..."
+                  disabled={isAiUpdatingProduct}
+                  className="w-full text-xs sm:text-sm p-3.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium leading-relaxed resize-none shadow-inner"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => handleAiUpdateProductInModal()}
+                  disabled={isAiUpdatingProduct || !aiUpdatePrompt.trim()}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold rounded-xl text-xs sm:text-sm shadow-sm hover:shadow transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {isAiUpdatingProduct ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Updating via MCP AI (update_product_detail_tool)...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>✨ Update Product with AI</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Quick Prompt Suggestions */}
+              <div className="space-y-1.5 pt-1">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">
+                  💡 Quick Suggestions (Click to Apply):
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    disabled={isAiUpdatingProduct}
+                    onClick={() => handleAiUpdateProductInModal('Update the product description so it look a like premium product')}
+                    className="text-[11px] px-2.5 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-800 rounded-lg font-medium transition-all shadow-2xs cursor-pointer"
+                  >
+                    ✨ Make Description Look Premium
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isAiUpdatingProduct}
+                    onClick={() => handleAiUpdateProductInModal('Make this product 100% organic, farm-fresh, and highlight health benefits with bullet points')}
+                    className="text-[11px] px-2.5 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-800 rounded-lg font-medium transition-all shadow-2xs cursor-pointer"
+                  >
+                    🌿 100% Organic & Farm Fresh
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isAiUpdatingProduct}
+                    onClick={() => handleAiUpdateProductInModal('Rewrite description for maximum conversion and add 4 compelling selling points')}
+                    className="text-[11px] px-2.5 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-800 rounded-lg font-medium transition-all shadow-2xs cursor-pointer"
+                  >
+                    🎯 Boost Conversion & SEO
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isAiUpdatingProduct}
+                    onClick={() => handleAiUpdateProductInModal('Suggest competitive Indian Rupee pricing and highlight value for money')}
+                    className="text-[11px] px-2.5 py-1 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-slate-700 hover:text-emerald-800 rounded-lg font-medium transition-all shadow-2xs cursor-pointer"
+                  >
+                    🏷️ Competitive ₹ Pricing
+                  </button>
+                </div>
+              </div>
+
+              {/* Verify & Review Changes Box */}
+              <div className="p-3.5 bg-gradient-to-br from-emerald-50/90 via-teal-50/40 to-slate-50 border-2 border-emerald-300 rounded-xl space-y-3 text-xs shadow-xs">
+                <div className="flex items-center justify-between border-b border-emerald-200/80 pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-2xs">
+                      <CheckCircle2 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
+                        <span>Verify & Review Product Changes</span>
+                        {editingProductData.hasAiUpdated && (
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded-full border border-emerald-300 animate-pulse">
+                            AI Updated ✓
+                          </span>
+                        )}
+                      </h4>
+                      <p className="text-[10px] text-emerald-700">
+                        Verify Title, Category, Pricing & Description before saving
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold text-emerald-800 bg-white px-2.5 py-1 rounded-lg border border-emerald-200 shadow-2xs">
+                    ₹{editingProductData.product.price} - ₹{editingProductData.product.mrp}
+                  </span>
+                </div>
+
+                {/* Verified Product Title */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Product Title:</span>
+                    <span className="text-[10px] text-slate-400 font-normal">Editable</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editingProductData.product.name}
+                    onChange={(e) =>
+                      setEditingProductData({
+                        ...editingProductData,
+                        product: { ...editingProductData.product, name: e.target.value },
+                      })
+                    }
+                    className="w-full text-xs font-semibold px-3 py-1.5 bg-white border border-emerald-200 rounded-lg text-slate-800 focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                  />
+                </div>
+
+                {/* Category & Pricing Row */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase">Category</label>
+                    <input
+                      type="text"
+                      value={editingProductData.product.category_name}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: { ...editingProductData.product, category_name: e.target.value },
+                        })
+                      }
+                      className="w-full text-xs px-2 py-1 bg-white border border-emerald-200 rounded-md text-slate-700 font-medium focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase">Selling Price (₹)</label>
+                    <input
+                      type="number"
+                      value={editingProductData.product.price}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: { ...editingProductData.product, price: parseFloat(e.target.value) || 0 },
+                        })
+                      }
+                      className="w-full text-xs px-2 py-1 bg-white border border-emerald-200 rounded-md text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase">MRP Price (₹)</label>
+                    <input
+                      type="number"
+                      value={editingProductData.product.mrp}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: { ...editingProductData.product, mrp: parseFloat(e.target.value) || 0 },
+                        })
+                      }
+                      className="w-full text-xs px-2 py-1 bg-white border border-emerald-200 rounded-md text-slate-700 font-medium focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Verified Product Description */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Product Description:</span>
+                    <span className="text-[10px] text-emerald-700 font-medium">Verify & Edit</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editingProductData.product.description}
+                    onChange={(e) =>
+                      setEditingProductData({
+                        ...editingProductData,
+                        product: { ...editingProductData.product, description: e.target.value },
+                      })
+                    }
+                    className="w-full text-xs p-2.5 bg-white border border-emerald-200 rounded-lg text-slate-800 leading-relaxed focus:ring-1 focus:ring-emerald-500 outline-hidden resize-none"
+                  />
+                </div>
+
+                {/* Verified Key Features */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Key Features ({editingProductData.product.key_features?.length || 0}):
+                  </label>
+                  {editingProductData.product.key_features && editingProductData.product.key_features.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {editingProductData.product.key_features.map((feat, fIdx) => (
+                        <span
+                          key={fIdx}
+                          className="inline-flex items-center gap-1 text-[10px] bg-white border border-emerald-300 text-emerald-900 px-2 py-0.5 rounded-md font-medium shadow-2xs"
+                        >
+                          <span>✓ {feat}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-400 italic">No bullet points added yet.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 flex items-center gap-1 font-medium">
+                  <Info className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Verify changes above and click &ldquo;Verify and Save&rdquo;</span>
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingProductData(null)}
+                    className="px-4 py-2 border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveFullProduct}
+                    className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold rounded-xl text-xs shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Verify and Save</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Original Manual Edit Form Modal */
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center space-x-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
+                    <Edit className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800">Edit Product Details</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingProductData(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-3.5 text-xs">
+                {/* Product Title */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Product Title</label>
+                  <input
+                    type="text"
+                    value={editingProductData.product.name}
+                    onChange={(e) =>
+                      setEditingProductData({
+                        ...editingProductData,
+                        product: { ...editingProductData.product, name: e.target.value },
+                      })
+                    }
+                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium"
+                  />
+                </div>
+
+                {/* Category */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Category</label>
+                  <select
+                    value={editingProductData.product.category_id || activeCategories[0]?.id || ''}
+                    onChange={(e) => {
+                      const selectedCat = activeCategories.find((c) => c.id === e.target.value);
+                      setEditingProductData({
+                        ...editingProductData,
+                        product: {
+                          ...editingProductData.product,
+                          category_id: e.target.value,
+                          category_name: selectedCat?.name || editingProductData.product.category_name,
+                        },
+                      });
+                    }}
+                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium bg-white"
+                  >
+                    {activeCategories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Price & MRP */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Selling Price (₹)</label>
+                    <input
+                      type="number"
+                      value={editingProductData.product.price}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: {
+                            ...editingProductData.product,
+                            price: parseFloat(e.target.value) || 0,
+                          },
+                        })
+                      }
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">MRP Price (₹)</label>
+                    <input
+                      type="number"
+                      value={editingProductData.product.mrp}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: {
+                            ...editingProductData.product,
+                            mrp: parseFloat(e.target.value) || 0,
+                          },
+                        })
+                      }
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Stock & Unit */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Stock Quantity</label>
+                    <input
+                      type="number"
+                      value={editingProductData.product.stock_quantity}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: {
+                            ...editingProductData.product,
+                            stock_quantity: parseInt(e.target.value) || 0,
+                          },
+                        })
+                      }
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Unit / Pack Size</label>
+                    <input
+                      type="text"
+                      value={editingProductData.product.unit}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: {
+                            ...editingProductData.product,
+                            unit: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="e.g. 1 pc, 500 g"
+                      className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Product Description</label>
+                  <textarea
+                    rows={3}
+                    value={editingProductData.product.description}
+                    onChange={(e) =>
+                      setEditingProductData({
+                        ...editingProductData,
+                        product: {
+                          ...editingProductData.product,
+                          description: e.target.value,
+                        },
+                      })
+                    }
+                    className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-hidden resize-none leading-relaxed"
+                  />
+                </div>
+
+                {/* Key Features */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Key Features / Bullets</label>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {(editingProductData.product.key_features || []).map((feat, fIdx) => (
+                      <span
+                        key={fIdx}
+                        className="inline-flex items-center gap-1 text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md"
+                      >
+                        <span>✓ {feat}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = (editingProductData.product.key_features || []).filter((_, i) => i !== fIdx);
+                            setEditingProductData({
+                              ...editingProductData,
+                              product: { ...editingProductData.product, key_features: updated },
+                            });
+                          }}
+                          className="text-slate-400 hover:text-rose-600 font-bold ml-1 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={editingProductData.newFeatureInput || ''}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          newFeatureInput: e.target.value,
+                        })
+                      }
+                      placeholder="Add a new feature (e.g. '100% Cotton')..."
+                      className="flex-1 text-xs px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = (editingProductData.newFeatureInput || '').trim();
+                          if (val) {
+                            setEditingProductData({
+                              ...editingProductData,
+                              newFeatureInput: '',
+                              product: {
+                                ...editingProductData.product,
+                                key_features: [...(editingProductData.product.key_features || []), val],
+                              },
+                            });
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = (editingProductData.newFeatureInput || '').trim();
+                        if (val) {
+                          setEditingProductData({
+                            ...editingProductData,
+                            newFeatureInput: '',
+                            product: {
+                              ...editingProductData.product,
+                              key_features: [...(editingProductData.product.key_features || []), val],
+                            },
+                          });
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-semibold rounded-lg text-xs transition-colors cursor-pointer"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {/* Image Preview & URL */}
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Image URL</label>
+                  <div className="flex items-center gap-2">
+                    <div className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-50">
+                      <img
+                        src={editingProductData.product.image_url}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                        onError={(e: any) => {
+                          e.target.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=200&q=80';
+                        }}
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={editingProductData.product.image_url}
+                      onChange={(e) =>
+                        setEditingProductData({
+                          ...editingProductData,
+                          product: {
+                            ...editingProductData.product,
+                            image_url: e.target.value,
+                          },
+                        })
+                      }
+                      className="flex-1 text-xs px-3 py-2 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-hidden font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingProductData(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveFullProduct}
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold rounded-xl text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Save Changes</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

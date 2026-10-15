@@ -10,6 +10,7 @@ export interface McpProductResult {
   description: string;
   key_features?: string[];
   price_range?: string;
+  image_url?: string;
 }
 
 let cachedSessionId: string | null = null;
@@ -43,6 +44,9 @@ async function initializeMcpSession(mcpUrl: string): Promise<string | null> {
     });
 
     const sessionId = initRes.headers.get('mcp-session-id');
+    try {
+      await initRes.text();
+    } catch {}
     if (sessionId) {
       cachedSessionId = sessionId;
       return sessionId;
@@ -78,25 +82,51 @@ function parseMcpPayload(text: string): any {
   }
 }
 
+function normalizeImageUrl(url?: string | null): string | undefined {
+  if (!url || typeof url !== 'string') return undefined;
+  let clean = url.trim();
+  // Strip markdown link formatting if present e.g. [http://...](http://...)
+  const match = clean.match(/https?:\/\/[^\s'")\]]+/);
+  if (match) clean = match[0];
+
+  const mcpUrl = getMcpUrl();
+  try {
+    const mcpOrigin = new URL(mcpUrl).origin;
+    if (clean.includes('127.0.0.1:8000') || clean.includes('localhost:8000')) {
+      clean = clean.replace(/https?:\/\/(127\.0\.0\.1|localhost):8000/, mcpOrigin);
+    }
+  } catch {}
+  return clean;
+}
+
 /**
  * Extracts product items from the MCP response payload
- * Handles both single product objects and arrays of products.
+ * Handles both wrapped JSON-RPC { result: ... } and direct tool payloads { structuredContent, content }
  */
 function extractProductsFromPayload(payload: any): McpProductResult[] {
-  if (!payload?.result) return [];
-  const res = payload.result;
+  if (!payload) return [];
+  const res = payload.result !== undefined ? payload.result : payload;
+
+  const mapItem = (p: any): McpProductResult => ({
+    product_name: p.product_name,
+    category: p.category,
+    description: p.description,
+    key_features: Array.isArray(p.key_features) ? p.key_features : [],
+    price_range: p.price_range,
+    image_url: normalizeImageUrl(p.image_url),
+  });
 
   // 1. Check structuredContent
   if (res.structuredContent?.result) {
     const sc = res.structuredContent.result;
     if (Array.isArray(sc)) {
-      return sc.filter((p) => p && typeof p === 'object' && p.product_name);
+      return sc.filter((p) => p && typeof p === 'object' && p.product_name).map(mapItem);
     }
     if (sc && typeof sc === 'object' && sc.product_name) {
-      return [sc as McpProductResult];
+      return [mapItem(sc)];
     }
     if (Array.isArray(sc.products)) {
-      return sc.products.filter((p: any) => p && typeof p === 'object' && p.product_name);
+      return sc.products.filter((p: any) => p && typeof p === 'object' && p.product_name).map(mapItem);
     }
   }
 
@@ -107,19 +137,19 @@ function extractProductsFromPayload(payload: any): McpProductResult[] {
         try {
           const parsed = JSON.parse(item.text);
           if (Array.isArray(parsed)) {
-            return parsed.filter((p) => p && typeof p === 'object' && p.product_name);
+            return parsed.filter((p) => p && typeof p === 'object' && p.product_name).map(mapItem);
           }
           if (Array.isArray(parsed.result)) {
-            return parsed.result.filter((p: any) => p && typeof p === 'object' && p.product_name);
+            return parsed.result.filter((p: any) => p && typeof p === 'object' && p.product_name).map(mapItem);
           }
           if (parsed.result?.product_name) {
-            return [parsed.result as McpProductResult];
+            return [mapItem(parsed.result)];
           }
           if (parsed.product_name) {
-            return [parsed as McpProductResult];
+            return [mapItem(parsed)];
           }
           if (Array.isArray(parsed.products)) {
-            return parsed.products.filter((p: any) => p && typeof p === 'object' && p.product_name);
+            return parsed.products.filter((p: any) => p && typeof p === 'object' && p.product_name).map(mapItem);
           }
         } catch {
           // not valid JSON text
@@ -163,11 +193,13 @@ export async function callMcpProductTool(userMessage: string): Promise<McpProduc
         params: {
           name: 'generate_product_detail_tool',
           arguments: {
-            user_message: userMessage,
+            user_message: /rupee|inr|₹/i.test(userMessage)
+              ? userMessage
+              : `${userMessage} (Pricing requirement: Provide realistic retail pricing in Indian Rupees INR ₹, e.g. price_range: '₹40 - ₹120')`,
           },
         },
       }),
-      signal: AbortSignal.timeout(60000), // 60s timeout for LLM generation
+      signal: AbortSignal.timeout(90000), // 90s timeout for LLM generation
     });
 
     const newSession = response.headers.get('mcp-session-id');
@@ -193,3 +225,86 @@ export async function callMcpProductTool(userMessage: string): Promise<McpProduc
     throw new Error(`MCP Server Error (${mcpUrl}): ${err.message || 'Call failed'}`);
   }
 }
+
+export interface McpUpdateProductArgs {
+  product_name: string;
+  category?: string;
+  description?: string;
+  key_features?: string[];
+  price_range?: string;
+}
+
+/**
+ * Calls update_product_detail_tool on the live MCP Server
+ * to update an existing product using AI prompt instructions
+ */
+export async function callMcpUpdateProductTool(
+  userMessage: string,
+  productDetail: McpUpdateProductArgs
+): Promise<McpProductResult | null> {
+  const mcpUrl = getMcpUrl();
+
+  let sessionId = cachedSessionId;
+  if (!sessionId) {
+    sessionId = await initializeMcpSession(mcpUrl);
+  }
+
+  const executeCall = async (sessId: string | null) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+    };
+    if (sessId) {
+      headers['mcp-session-id'] = sessId;
+    }
+
+    const response = await fetch(mcpUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'tools/call',
+        params: {
+          name: 'update_product_detail_tool',
+          arguments: {
+            user_message: /rupee|inr|₹/i.test(userMessage)
+              ? userMessage
+              : `${userMessage} (Pricing requirement: Keep or update prices in Indian Rupees INR ₹, e.g. price_range: '₹40 - ₹120')`,
+            product_detail: {
+              product_name: productDetail.product_name,
+              category: productDetail.category || 'General',
+              description: productDetail.description || '',
+              key_features: productDetail.key_features || [],
+              price_range: productDetail.price_range || '',
+            },
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(90000),
+    });
+
+    const newSession = response.headers.get('mcp-session-id');
+    if (newSession) cachedSessionId = newSession;
+
+    const rawText = await response.text();
+    return parseMcpPayload(rawText);
+  };
+
+  try {
+    let payload = await executeCall(sessionId);
+
+    // If session expired or missing, re-initialize once and retry
+    if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
+      cachedSessionId = await initializeMcpSession(mcpUrl);
+      payload = await executeCall(cachedSessionId);
+    }
+
+    const products = extractProductsFromPayload(payload);
+    return products.length > 0 ? products[0] : null;
+  } catch (err: any) {
+    console.error('[MCP] update_product_detail_tool call error:', err);
+    throw new Error(`MCP Server Error (${mcpUrl}): ${err.message || 'Update call failed'}`);
+  }
+}
+
