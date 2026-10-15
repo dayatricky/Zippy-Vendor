@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <!-- Premium Emerald Gradient -->
+    <linearGradient id="zippyBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#16a34a" />
+      <stop offset="45%" stop-color="#15803d" />
+      <stop offset="100%" stop-color="#0f5128" />
+    </linearGradient>
+
+    <!-- Shiny gloss overlay -->
+    <linearGradient id="gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3" />
+      <stop offset="60%" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Leaf Gradient -->
+    <linearGradient id="leafGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#86efac" />
+    </linearGradient>
+
+    <!-- Soft Drop Shadow for Icon Elements -->
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#0a3319" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <!-- Background Squircle with Glow Border -->
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#zippyBg)" />
+  <rect x="4" y="4" width="120" height="60" rx="30" fill="url(#gloss)" />
+  <rect x="5.5" y="5.5" width="117" height="117" rx="28.5" fill="none" stroke="#86efac" stroke-width="2.5" stroke-opacity="0.45" />
+
+  <!-- Content Group with Drop Shadow -->
+  <g filter="url(#shadow)">
+    <!-- Speed Lines (Express 10-Minute Delivery) -->
+    <!-- Top Speed Line -->
+    <path d="M 16 52 L 35 52" stroke="#ffffff" stroke-width="6.5" stroke-linecap="round" />
+    <!-- Bottom Speed Line (Offset for dynamic motion) -->
+    <path d="M 12 66 L 31 66" stroke="#ffffff" stroke-width="6.5" stroke-linecap="round" />
+
+    <!-- Official Bold Speed 'Z' -->
+    <path 
+      d="M 44 36 L 94 36 C 98.5 36 101.5 39.5 100 44 C 99 47 96.5 50.5 93 54.5 L 63.5 83 L 95 83 C 99 83 102 86 102 90 C 102 94 99 97 95 97 L 42 97 C 37.5 97 34.5 93.5 36 89 C 37 86 39.5 82.5 43 78.5 L 72.5 50 L 44 50 C 40 50 37 47 37 43 C 37 39 40 36 44 36 Z" 
+      fill="#ffffff" 
+    />
+
+    <!-- Organic Grocery Leaf Accent (Top Right) -->
+    <path 
+      d="M 94 20 C 94 20 110 20 112 32 C 112 40 102 43 102 43 C 102 43 102 30 94 20 Z" 
+      fill="url(#leafGrad)" 
+    />
+    <!-- Leaf Center Vein -->
+    <path 
+      d="M 97 34 C 102 30 107 26 107 26" 
+      stroke="#14532d" 
+      stroke-width="1.8" 
+      stroke-linecap="round" 
+    />
+  </g>
+</svg>
