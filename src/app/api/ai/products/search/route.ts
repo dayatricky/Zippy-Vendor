@@ -16,8 +16,9 @@ export async function POST(request: Request) {
       );
     }
 
+    const authHeader = request.headers.get('authorization') || undefined;
     const mcpUrl = getMcpUrl();
-    const results = await callMcpSearchProductsTool(query.trim());
+    const results = await callMcpSearchProductsTool(query.trim(), authHeader);
 
     return NextResponse.json({
       success: true,

@@ -36,6 +36,8 @@ export interface CategoryItem {
   description: string;
 }
 
+export type ProductStatus = 'PENDING' | 'ACTIVE' | 'INACTIVE' | 'REJECTED';
+
 export interface Product {
   id: string;
   name: string;
@@ -43,9 +45,15 @@ export interface Product {
   mrp: number;
   image: string;
   category: string;
+  categoryId?: string;
   stock: number;
   isAvailable: boolean;
   unit: string;
+  status?: ProductStatus | string;
+  rejectionReason?: string;
+  sku?: string;
+  barcode?: string;
+  brand_name?: string;
 }
 
 export interface OrderItem {

@@ -32,8 +32,9 @@ export async function POST(request: Request) {
       );
     }
 
+    const authHeader = request.headers.get('authorization') || undefined;
     const mcpUrl = getMcpUrl();
-    const results = await callMcpVoiceSearchTool(cleanAudioBase64);
+    const results = await callMcpVoiceSearchTool(cleanAudioBase64, authHeader);
 
     return NextResponse.json({
       success: true,

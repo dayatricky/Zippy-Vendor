@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://192.168.1.15:5014/api').replace(/\/+$/, '');
+const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
 const API_BASE_URL = rawBaseUrl.endsWith('/api/v1')
   ? rawBaseUrl
   : rawBaseUrl.endsWith('/api')

@@ -24,6 +24,7 @@ import {
   Mic,
   MicOff,
   Volume2,
+  Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGetCategoriesQuery } from '@/store/api/vendorApi';
@@ -114,7 +115,7 @@ export default function AiProductChatbot({
   onAddProduct,
   onOpenManualModal,
   onCatalogRefresh,
-  isStoreApproved = true,
+  isStoreApproved = false,
 }: AiProductChatbotProps) {
   // Query categories directly from Category API as well
   const { data: categoriesApiData } = useGetCategoriesQuery(undefined, { skip: !isOpen });
@@ -200,13 +201,13 @@ export default function AiProductChatbot({
     {
       id: 'welcome-1',
       sender: 'assistant',
-      text: 'Hello! 👋 I am your **Zippy AI Catalog Copilot**. Tell me what products you want to generate (e.g., *"Generate dairy products like milk and yogurt"* or *"Generate fresh fruits like apples and bananas"*). All product details are fetched live from your **MCP Server** (`http://192.168.1.75:8000/mcp`)!',
+      text: 'Hello! 👋 I am your **Zippy AI Catalog Copilot**. Tell me what products you want to generate (e.g., *"Generate dairy products like milk and yogurt"* or *"Generate fresh fruits like apples and bananas"*). All product details are fetched live from your **MCP Server** (`zippy-mcp.elyriasoft.com/mcp`)!',
       timestamp: 'Just now',
     },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [mcpServerStatus, setMcpServerStatus] = useState<string>('Live MCP Server (192.168.1.75:8000/mcp)');
+  const [mcpServerStatus, setMcpServerStatus] = useState<string>('Live MCP Server (zippy-mcp.elyriasoft.com/mcp)');
   const [addingIds, setAddingIds] = useState<Record<string, boolean>>({});
   const [batchAdding, setBatchAdding] = useState(false);
   const [editingProductData, setEditingProductData] = useState<{
@@ -638,7 +639,7 @@ export default function AiProductChatbot({
     product: AiSuggestedProduct
   ) => {
     if (!isStoreApproved) {
-      toast.error('Store approval required to add products to inventory.');
+      toast.error('Store onboarding approval required to add products to catalog.');
       return;
     }
 
@@ -708,7 +709,7 @@ export default function AiProductChatbot({
 
   const handleAddBatchProducts = async (msgId: string, products: AiSuggestedProduct[]) => {
     if (!isStoreApproved) {
-      toast.error('Store approval required to add products to inventory.');
+      toast.error('Store onboarding approval required to add products to catalog.');
       return;
     }
 
@@ -846,6 +847,14 @@ export default function AiProductChatbot({
 
         {/* Chat Messages Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-slate-50/50">
+          {!isStoreApproved && (
+            <div className="bg-amber-50 border border-amber-300 p-3.5 rounded-xl text-amber-950 flex items-center gap-2.5 text-xs shadow-xs">
+              <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Store Onboarding Required:</strong> You can explore AI product generation, but saving products to your catalog is locked until your store onboarding application is approved by Zippy Admin.
+              </span>
+            </div>
+          )}
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -907,6 +916,7 @@ export default function AiProductChatbot({
                       <button
                         onClick={() => handleAddBatchProducts(msg.id, msg.products!)}
                         disabled={
+                          !isStoreApproved ||
                           batchAdding ||
                           !msg.products.some((p) => p.selected && !p.isAdded)
                         }
@@ -1178,18 +1188,27 @@ export default function AiProductChatbot({
                                     <button
                                       type="button"
                                       onClick={() => handleAddSingleProduct(msg.id, pIdx, prod)}
-                                      disabled={isAdding || batchAdding}
-                                      className="text-xs px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-md shadow-2xs flex items-center gap-1 transition-all disabled:opacity-50"
+                                      disabled={!isStoreApproved || isAdding || batchAdding}
+                                      className={`text-xs px-3 py-1 font-medium rounded-md shadow-2xs flex items-center gap-1 transition-all ${
+                                        isStoreApproved
+                                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                                          : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                      }`}
                                     >
                                       {isAdding ? (
                                         <>
                                           <RefreshCw className="w-3 h-3 animate-spin" />
                                           <span>Adding...</span>
                                         </>
-                                      ) : (
+                                      ) : isStoreApproved ? (
                                         <>
                                           <Plus className="w-3 h-3" />
                                           <span>Add Product</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Lock className="w-3 h-3" />
+                                          <span>Add (Locked)</span>
                                         </>
                                       )}
                                     </button>
@@ -1323,8 +1342,8 @@ export default function AiProductChatbot({
           </form>
 
           <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-            <span>MCP Server: 192.168.1.75:8000/mcp</span>
-            <span>Store API: 192.168.1.15:5014</span>
+            <span>MCP Server: zippy-mcp.elyriasoft.com</span>
+            <span>Store API: zippy-api.elyriasoft.com</span>
           </div>
         </div>
       </div>
@@ -1347,7 +1366,7 @@ export default function AiProductChatbot({
                         update_product_detail_tool
                       </span>
                     </h3>
-                    <p className="text-[11px] text-slate-500">Live MCP Server (192.168.1.75:8000/mcp)</p>
+                    <p className="text-[11px] text-slate-500">Live MCP Server (zippy-mcp.elyriasoft.com/mcp)</p>
                   </div>
                 </div>
                 <button

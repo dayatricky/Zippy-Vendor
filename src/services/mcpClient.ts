@@ -1,7 +1,7 @@
 /**
  * MCP (Model Context Protocol) Client for Zippy Vendor Panel
- * Connects directly to the live MCP Server (http://192.168.1.75:8000/mcp)
- * to execute 'generate_product_detail_tool'.
+ * Connects directly to the live MCP Server (https://zippy-mcp.elyriasoft.com/mcp)
+ * to execute 'generate_product_detail_tool', 'search_products_tool', and 'search_products_from_voice_tool'.
  */
 
 export interface McpProductResult {
@@ -16,20 +16,38 @@ export interface McpProductResult {
 let cachedSessionId: string | null = null;
 
 export const getMcpUrl = (): string => {
-  return (process.env.MCP_SERVER_URL || 'http://192.168.1.75:8000/mcp').replace(/\/+$/, '');
+  return (process.env.MCP_SERVER_URL || 'https://zippy-mcp.elyriasoft.com/mcp').replace(/\/+$/, '');
 };
+
+/**
+ * Builds HTTP headers for MCP request with optional mcp-session-id and user Authorization header
+ */
+function buildMcpHeaders(sessId: string | null, authHeader?: string | null): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+  };
+  if (sessId) {
+    headers['mcp-session-id'] = sessId;
+  }
+  if (authHeader) {
+    const cleanAuth = authHeader.trim();
+    if (cleanAuth) {
+      headers['Authorization'] = cleanAuth.startsWith('Bearer ') ? cleanAuth : `Bearer ${cleanAuth}`;
+    }
+  }
+  return headers;
+}
 
 /**
  * Initializes a new session with the MCP server
  */
-async function initializeMcpSession(mcpUrl: string): Promise<string | null> {
+async function initializeMcpSession(mcpUrl: string, authHeader?: string | null): Promise<string | null> {
   try {
+    const headers = buildMcpHeaders(null, authHeader);
     const initRes = await fetch(mcpUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-      },
+      headers,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -165,23 +183,17 @@ function extractProductsFromPayload(payload: any): McpProductResult[] {
  * Calls generate_product_detail_tool on the live MCP Server
  * Always returns an array of McpProductResult (empty array if none found)
  */
-export async function callMcpProductTool(userMessage: string): Promise<McpProductResult[]> {
+export async function callMcpProductTool(userMessage: string, authHeader?: string | null): Promise<McpProductResult[]> {
   const mcpUrl = getMcpUrl();
 
   // Step 1: Ensure active session ID
   let sessionId = cachedSessionId;
   if (!sessionId) {
-    sessionId = await initializeMcpSession(mcpUrl);
+    sessionId = await initializeMcpSession(mcpUrl, authHeader);
   }
 
   const executeCall = async (sessId: string | null) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-    };
-    if (sessId) {
-      headers['mcp-session-id'] = sessId;
-    }
+    const headers = buildMcpHeaders(sessId, authHeader);
 
     const response = await fetch(mcpUrl, {
       method: 'POST',
@@ -214,7 +226,7 @@ export async function callMcpProductTool(userMessage: string): Promise<McpProduc
 
     // If session expired or missing, re-initialize once and retry
     if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
-      cachedSessionId = await initializeMcpSession(mcpUrl);
+      cachedSessionId = await initializeMcpSession(mcpUrl, authHeader);
       payload = await executeCall(cachedSessionId);
     }
 
@@ -240,23 +252,18 @@ export interface McpUpdateProductArgs {
  */
 export async function callMcpUpdateProductTool(
   userMessage: string,
-  productDetail: McpUpdateProductArgs
+  productDetail: McpUpdateProductArgs,
+  authHeader?: string | null
 ): Promise<McpProductResult | null> {
   const mcpUrl = getMcpUrl();
 
   let sessionId = cachedSessionId;
   if (!sessionId) {
-    sessionId = await initializeMcpSession(mcpUrl);
+    sessionId = await initializeMcpSession(mcpUrl, authHeader);
   }
 
   const executeCall = async (sessId: string | null) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-    };
-    if (sessId) {
-      headers['mcp-session-id'] = sessId;
-    }
+    const headers = buildMcpHeaders(sessId, authHeader);
 
     const response = await fetch(mcpUrl, {
       method: 'POST',
@@ -296,7 +303,7 @@ export async function callMcpUpdateProductTool(
 
     // If session expired or missing, re-initialize once and retry
     if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
-      cachedSessionId = await initializeMcpSession(mcpUrl);
+      cachedSessionId = await initializeMcpSession(mcpUrl, authHeader);
       payload = await executeCall(cachedSessionId);
     }
 
@@ -380,22 +387,16 @@ function extractVoiceSearchError(payload: any): string | null {
  * Calls search_products_from_voice_tool on the live MCP Server
  * passing audio_base64 to search products matching spoken audio
  */
-export async function callMcpVoiceSearchTool(audioBase64: string): Promise<McpVoiceSearchResult[]> {
+export async function callMcpVoiceSearchTool(audioBase64: string, authHeader?: string | null): Promise<McpVoiceSearchResult[]> {
   const mcpUrl = getMcpUrl();
 
   let sessionId = cachedSessionId;
   if (!sessionId) {
-    sessionId = await initializeMcpSession(mcpUrl);
+    sessionId = await initializeMcpSession(mcpUrl, authHeader);
   }
 
   const executeCall = async (sessId: string | null) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-    };
-    if (sessId) {
-      headers['mcp-session-id'] = sessId;
-    }
+    const headers = buildMcpHeaders(sessId, authHeader);
 
     const response = await fetch(mcpUrl, {
       method: 'POST',
@@ -426,7 +427,7 @@ export async function callMcpVoiceSearchTool(audioBase64: string): Promise<McpVo
 
     // If session expired or missing, retry once
     if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
-      cachedSessionId = await initializeMcpSession(mcpUrl);
+      cachedSessionId = await initializeMcpSession(mcpUrl, authHeader);
       payload = await executeCall(cachedSessionId);
     }
 
@@ -455,22 +456,16 @@ export async function callMcpVoiceSearchTool(audioBase64: string): Promise<McpVo
  * Calls search_products_tool on the live MCP Server
  * passing user_message to search products matching text query
  */
-export async function callMcpSearchProductsTool(userMessage: string): Promise<McpVoiceSearchResult[]> {
+export async function callMcpSearchProductsTool(userMessage: string, authHeader?: string | null): Promise<McpVoiceSearchResult[]> {
   const mcpUrl = getMcpUrl();
 
   let sessionId = cachedSessionId;
   if (!sessionId) {
-    sessionId = await initializeMcpSession(mcpUrl);
+    sessionId = await initializeMcpSession(mcpUrl, authHeader);
   }
 
   const executeCall = async (sessId: string | null) => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-    };
-    if (sessId) {
-      headers['mcp-session-id'] = sessId;
-    }
+    const headers = buildMcpHeaders(sessId, authHeader);
 
     const response = await fetch(mcpUrl, {
       method: 'POST',
@@ -501,7 +496,7 @@ export async function callMcpSearchProductsTool(userMessage: string): Promise<Mc
 
     // If session expired or missing, retry once
     if (!payload || (payload?.error && payload.error?.message?.toLowerCase().includes('session'))) {
-      cachedSessionId = await initializeMcpSession(mcpUrl);
+      cachedSessionId = await initializeMcpSession(mcpUrl, authHeader);
       payload = await executeCall(cachedSessionId);
     }
 

@@ -477,6 +477,7 @@ export async function POST(request: Request) {
       );
     }
 
+    const authHeader = request.headers.get('authorization') || undefined;
     const mcpUrl = getMcpUrl();
 
     // Check if the user intends to edit / refine existing products
@@ -506,7 +507,7 @@ export async function POST(request: Request) {
             description: targetProduct.description,
             key_features: targetProduct.key_features,
             price_range: targetProduct.price_range || `₹${targetProduct.price} - ₹${targetProduct.mrp}`,
-          });
+          }, authHeader);
 
           if (updatedSingle) {
             const { price, mrp, formattedPriceRange } = parseAndConvertPriceRange(updatedSingle.price_range);
@@ -588,7 +589,7 @@ Apply the requested modifications and return the complete updated product list i
               key_features: item.key_features || [],
               sku: `SKU-${slug.slice(0, 8).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`,
               barcode: String(Math.floor(100000000000 + Math.random() * 900000000000)),
-              status: 'ACTIVE',
+              status: 'PENDING',
             };
           });
 
@@ -617,7 +618,7 @@ Apply the requested modifications and return the complete updated product list i
     }
 
     // Standard MCP Product Generation
-    const mcpResults: McpProductResult[] = await callMcpProductTool(query);
+    const mcpResults: McpProductResult[] = await callMcpProductTool(query, authHeader);
 
     if (!mcpResults || mcpResults.length === 0) {
       return NextResponse.json({
@@ -658,7 +659,7 @@ Apply the requested modifications and return the complete updated product list i
         key_features: item.key_features || [],
         sku: `SKU-${slug.slice(0, 8).toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`,
         barcode: String(Math.floor(100000000000 + Math.random() * 900000000000)),
-        status: 'ACTIVE',
+        status: 'PENDING',
       };
     });
 
@@ -689,7 +690,7 @@ Apply the requested modifications and return the complete updated product list i
         success: false,
         source: 'mcp-server',
         server_url: getMcpUrl(),
-        message: `Unable to fetch product data from MCP Server (http://192.168.1.75:8000/mcp): ${error?.message || 'Connection failed'}. Please make sure the MCP server is running.`,
+        message: `Unable to fetch product data from MCP Server (${getMcpUrl()}): ${error?.message || 'Connection failed'}. Please make sure the MCP server is running.`,
         error: error?.message || 'MCP server unreachable',
         products: [],
       },

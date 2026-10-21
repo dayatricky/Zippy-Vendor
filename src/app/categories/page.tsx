@@ -15,9 +15,12 @@ import {
   RefreshCw,
   AlertCircle,
   Edit,
+  Lock,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useVendorStore } from '@/store/useVendorStore';
 import {
+  useGetStoreRequestQuery,
   useGetCategoriesQuery,
   useAddCategoryMutation,
   useUpdateCategoryMutation,
@@ -37,6 +40,23 @@ export default function CategoriesPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [apiError, setApiError] = useState('');
+
+  const token = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+  const savedStatus = typeof window !== 'undefined' ? localStorage.getItem('zippy_store_status') : null;
+
+  const { data: storeRequestData } = useGetStoreRequestQuery(undefined, {
+    skip: !token,
+    refetchOnMountOrArgChange: true,
+  });
+
+  const requestObj = (storeRequestData as any)?.data || storeRequestData;
+  const rawStatus = requestObj?.status || requestObj?.approvalStatus || requestObj?.storeRequest?.status;
+  const currentStatus = rawStatus
+    ? String(rawStatus).toUpperCase()
+    : savedStatus
+    ? String(savedStatus).toUpperCase()
+    : 'NOT_REGISTERED';
+  const isApproved = currentStatus === 'APPROVED';
 
   // RTK Query API hooks matching Swagger Specs (/vendor/categories)
   const {
@@ -102,6 +122,12 @@ export default function CategoriesPage() {
   const handleAddCategorySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCat.name) return;
+    if (!isApproved) {
+      const msg = `Store onboarding approval required to create categories! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApiError(msg);
+      toast.error(msg);
+      return;
+    }
     setApiError('');
 
     try {
@@ -135,6 +161,12 @@ export default function CategoriesPage() {
   };
 
   const handleEditCategoryClick = (cat: any) => {
+    if (!isApproved) {
+      const msg = `Store onboarding approval required to edit categories! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApiError(msg);
+      toast.error(msg);
+      return;
+    }
     setEditingCatId(cat.id);
     setNewCat({
       name: cat.name || '',
@@ -150,6 +182,12 @@ export default function CategoriesPage() {
   const handleEditCategorySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCatId || !newCat.name) return;
+    if (!isApproved) {
+      const msg = `Store onboarding approval required to update categories! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApiError(msg);
+      toast.error(msg);
+      return;
+    }
     setApiError('');
 
     try {
@@ -176,6 +214,10 @@ export default function CategoriesPage() {
   };
 
   const handleToggleStatus = async (catId: string, currentActive: boolean) => {
+    if (!isApproved) {
+      toast.error('Store onboarding approval required to change category status.');
+      return;
+    }
     setApiError('');
     try {
       if (isUUID(catId)) {
@@ -195,6 +237,10 @@ export default function CategoriesPage() {
   };
 
   const handleDeleteCategory = async (catId: string) => {
+    if (!isApproved) {
+      toast.error('Store onboarding approval required to delete categories.');
+      return;
+    }
     setApiError('');
     try {
       if (isUUID(catId)) {
@@ -235,16 +281,49 @@ export default function CategoriesPage() {
 
           <button
             onClick={() => {
+              if (!isApproved) {
+                const msg = `Store onboarding approval required to create categories! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+                setApiError(msg);
+                toast.error(msg);
+                return;
+              }
               setApiError('');
               setIsModalOpen(true);
             }}
-            className="px-5 py-2.5 rounded-2xl font-bold text-xs bg-[#167a46] hover:bg-[#12653a] text-white transition-all flex items-center space-x-2 shadow-md cursor-pointer"
+            className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-md ${
+              isApproved
+                ? 'bg-[#167a46] hover:bg-[#12653a] text-white cursor-pointer active:scale-95'
+                : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+            }`}
           >
-            <Plus className="w-4 h-4" />
-            <span>Add New Category</span>
+            {isApproved ? <Plus className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+            <span>{isApproved ? 'Add New Category' : 'Add Category (Locked)'}</span>
           </button>
         </div>
       </div>
+
+      {/* Store Onboarding Approval Warning Banner */}
+      {!isApproved && (
+        <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-2xl text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm animate-in fade-in-50">
+          <div className="flex items-center space-x-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" />
+            <div>
+              <p className="font-bold text-sm text-amber-950">
+                Store Onboarding Approval Required
+              </p>
+              <p className="text-amber-800 text-xs mt-0.5">
+                Category and product creation is locked until your store onboarding application is approved by Zippy Admin. Status: <strong className="uppercase">{currentStatus || 'NOT_REGISTERED'}</strong>
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/store-request"
+            className="px-4 py-2 bg-amber-950 text-white rounded-xl text-xs font-black hover:bg-black transition-all shrink-0 shadow-sm"
+          >
+            {currentStatus === 'NOT_REGISTERED' ? 'Complete Store Onboarding 🚀' : 'Track Application 📋'}
+          </Link>
+        </div>
+      )}
 
       {/* API Error Alert Banner */}
       {categoriesQueryError && (

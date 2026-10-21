@@ -1,7 +1,7 @@
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import { VendorProfile, CategoryItem, Product, Order, PayoutRequest } from '../useVendorStore';
 
-const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://192.168.1.15:5014/api').replace(/\/+$/, '');
+const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
 const API_BASE_URL = rawBaseUrl.endsWith('/api/v1')
   ? rawBaseUrl
   : rawBaseUrl.endsWith('/api')
@@ -219,7 +219,7 @@ export const vendorApi = createApi({
         mrp?: number;
         stock_quantity?: number;
         images?: Array<{ image_url: string; display_order?: number; is_primary?: boolean }>;
-        status?: 'ACTIVE' | 'INACTIVE';
+        status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | string;
       }
     >({
       query: (rawBody) => {
@@ -247,7 +247,7 @@ export const vendorApi = createApi({
             mrp: Number(cleanBody.mrp ?? price) || 0,
             stock_quantity: Number(cleanBody.stock_quantity ?? stock ?? 100),
             images: imagesPayload,
-            status: cleanBody.status || 'ACTIVE',
+            status: cleanBody.status || 'PENDING',
           },
         };
       },
@@ -272,7 +272,7 @@ export const vendorApi = createApi({
         stock?: number;
         stock_quantity?: number;
         images?: Array<{ image_url: string; display_order?: number; is_primary?: boolean }>;
-        status?: 'ACTIVE' | 'INACTIVE';
+        status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | string;
       }
     >({
       query: ({ id, price, stock, ...body }) => ({

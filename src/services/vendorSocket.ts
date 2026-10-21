@@ -13,12 +13,12 @@ export interface NewOrderPayload {
 let socket: Socket | null = null;
 
 export const getSocketUrl = (): string => {
-  const raw = (process.env.NEXT_PUBLIC_SOCKET_URL || 'http://192.168.1.15:5014/vendor/orders').replace(/\/+$/, '');
+  const raw = (process.env.NEXT_PUBLIC_SOCKET_URL || 'https://zippy-api.elyriasoft.com/vendor/orders').replace(/\/+$/, '');
   return raw.endsWith('/vendor/orders') ? raw : `${raw}/vendor/orders`;
 };
 
 export const getApiBaseUrl = (): string => {
-  const rawUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://192.168.1.15:5014/api').replace(/\/+$/, '');
+  const rawUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
   return rawUrl.endsWith('/api/v1')
     ? rawUrl
     : rawUrl.endsWith('/api')
@@ -54,7 +54,7 @@ export const connectVendorSocket = (
     auth: {
       token: vendorAccessToken,
     },
-    transports: ['websocket'],
+    transports: ['websocket', 'polling'],
   });
 
   // Listen for successful connection

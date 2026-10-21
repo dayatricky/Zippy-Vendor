@@ -17,6 +17,11 @@ import {
   MicOff,
   Loader2,
   Volume2,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Check,
+  Lock,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import {
@@ -53,6 +58,7 @@ export default function ProductsPage() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'INACTIVE' | 'REJECTED'>('ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -99,9 +105,13 @@ export default function ProductsPage() {
 
       const toastId = toast.loading('Searching products from voice (search_products_from_voice_tool)...');
 
+      const userToken = token || (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null);
       const res = await fetch('/api/ai/products/voice-search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {}),
+        },
         body: JSON.stringify({ audio_base64: base64 }),
       });
 
@@ -166,9 +176,13 @@ export default function ProductsPage() {
     setIsTextSearching(true);
     const toastId = toast.loading(`Searching MCP catalog for "${q}"...`);
     try {
+      const userToken = token || (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null);
       const res = await fetch('/api/ai/products/search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {}),
+        },
         body: JSON.stringify({ user_message: q }),
       });
       const data = await res.json();
@@ -237,6 +251,7 @@ export default function ProductsPage() {
     setMcpSearchResults(null);
     setSearchTerm('');
     setSelectedCategory('All');
+    setStatusFilter('ALL');
     try {
       refetchProducts();
     } catch {}
@@ -292,8 +307,10 @@ export default function ProductsPage() {
     return null;
   })();
 
-  const displayProducts = rawApiProducts && Array.isArray(rawApiProducts)
-    ? rawApiProducts.map((p: any, idx: number) => {
+  const displayProducts = useMemo(() => {
+    let apiList: any[] = [];
+    if (rawApiProducts && Array.isArray(rawApiProducts)) {
+      apiList = rawApiProducts.map((p: any, idx: number) => {
         const catName = typeof p.category === 'object' && p.category !== null 
           ? p.category.name 
           : typeof p.category_name === 'object' && p.category_name !== null
@@ -305,8 +322,16 @@ export default function ProductsPage() {
           : null;
         const imageUrl = primaryImgObj?.image_url || primaryImgObj?.url || p.image_url || p.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
 
+        const rawStatus = (p.status || p.approval_status || p.approvalStatus) as string | undefined;
+        let status = rawStatus ? String(rawStatus).toUpperCase() : 'PENDING';
+        if (status === 'UNDER_REVIEW' || status === 'PENDING_APPROVAL' || status === 'PENDING_REVIEW') {
+          status = 'PENDING';
+        }
+
+        const isAvailable = status === 'ACTIVE';
+
         return {
-          id: p.id || p._id || `p-${idx}`,
+          id: String(p.id || p._id || `p-${idx}`),
           name: p.name || 'Product',
           price: p.price || p.mrp || 0,
           mrp: p.mrp || p.price || 0,
@@ -314,15 +339,53 @@ export default function ProductsPage() {
           category: typeof catName === 'string' ? catName : 'Grocery',
           categoryId: typeof p.category === 'object' && p.category !== null ? p.category.id : p.category_id,
           stock: p.stock ?? p.stock_quantity ?? 10,
-          isAvailable: p.status === 'ACTIVE' || p.isAvailable !== false,
+          isAvailable: isAvailable,
+          status: status,
+          rejectionReason: p.rejection_reason || p.rejectionReason,
           unit: p.pack_size || p.unit || '1 kg',
+          sku: p.sku,
+          brand_name: p.brand_name || 'Generic',
         };
-      })
-    : [];
+      });
+    }
+
+    // Merge with any local products in Zustand store created in this session
+    const combined = [...apiList];
+    if (localProducts && localProducts.length > 0) {
+      for (const lp of localProducts) {
+        if (!combined.some((cp) => cp.id === lp.id || cp.name.toLowerCase() === lp.name.toLowerCase())) {
+          combined.unshift({
+            id: lp.id,
+            name: lp.name,
+            price: lp.price,
+            mrp: lp.mrp,
+            image: lp.image,
+            category: lp.category,
+            categoryId: lp.categoryId,
+            stock: lp.stock,
+            isAvailable: lp.status === 'ACTIVE',
+            status: lp.status || 'PENDING',
+            rejectionReason: lp.rejectionReason,
+            unit: lp.unit,
+            sku: lp.sku,
+            brand_name: lp.brand_name || 'Generic',
+          });
+        }
+      }
+    }
+    return combined;
+  }, [rawApiProducts, localProducts]);
+
+  const pendingCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'PENDING').length, [displayProducts]);
+  const activeCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'ACTIVE').length, [displayProducts]);
+  const inactiveCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'INACTIVE').length, [displayProducts]);
+  const rejectedCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'REJECTED').length, [displayProducts]);
 
   const handleAddProductClick = () => {
     if (!isApproved) {
-      setApprovalError(`Store approval is required to add products to inventory. Current status: ${currentStatus || 'NOT_REGISTERED'}`);
+      const msg = `Store onboarding approval is required before adding products to inventory. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApprovalError(msg);
+      toast.error(msg);
       return;
     }
     if (categoriesList.length === 0) {
@@ -347,6 +410,12 @@ export default function ProductsPage() {
   });
 
   const handleEditProductClick = (product: any) => {
+    if (!isApproved) {
+      const msg = `Store onboarding approval is required to edit products. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApprovalError(msg);
+      toast.error(msg);
+      return;
+    }
     setEditingProductId(product.id);
     const catObj = categoriesList.find((c: any) => c.id === product.categoryId || c.name === product.category);
     setNewProduct({
@@ -388,7 +457,9 @@ export default function ProductsPage() {
           category: existingInStore?.category || item.category || 'General',
           categoryId: existingInStore?.categoryId,
           stock: existingInStore?.stock ?? item.stock_quantity ?? 10,
-          isAvailable: existingInStore ? existingInStore.isAvailable : true,
+          isAvailable: existingInStore ? existingInStore.isAvailable : false,
+          status: existingInStore ? existingInStore.status : 'PENDING',
+          rejectionReason: existingInStore?.rejectionReason,
           unit: existingInStore?.unit || item.unit || '1 kg',
           isExistingInStore: Boolean(existingInStore),
           rawItemData: item,
@@ -400,15 +471,16 @@ export default function ProductsPage() {
     return displayProducts
       .filter((p: any) => {
         const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
+        const matchesStatus = statusFilter === 'ALL' || p.status === statusFilter;
         const matchesSearch = searchTerm ? p.name.toLowerCase().includes(searchTerm.toLowerCase()) : true;
-        return matchesCategory && matchesSearch;
+        return matchesCategory && matchesStatus && matchesSearch;
       })
       .map((p: any) => ({
         ...p,
         isExistingInStore: true,
         rawItemData: p,
       }));
-  }, [mcpSearchResults, displayProducts, selectedCategory, searchTerm]);
+  }, [mcpSearchResults, displayProducts, selectedCategory, statusFilter, searchTerm]);
 
   const isUUID = (str?: string) => Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
 
@@ -475,6 +547,10 @@ export default function ProductsPage() {
   };
 
   const handleDeleteProduct = async (prodId: string) => {
+    if (!isApproved) {
+      toast.error('Store onboarding approval required to delete products.');
+      return;
+    }
     try {
       if (isUUID(prodId)) {
         await deleteProductApi(prodId).unwrap();
@@ -491,6 +567,12 @@ export default function ProductsPage() {
   const handleAddProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProduct.name || !newProduct.price) return;
+    if (!isApproved) {
+      const msg = `Store onboarding approval is required before adding products! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+      setApprovalError(msg);
+      toast.error(msg);
+      return;
+    }
 
     const selectedCat = categoriesList.find((c: any) => c.id === newProduct.categoryId || c.name === newProduct.categoryName) || categoriesList[0];
     
@@ -527,9 +609,9 @@ export default function ProductsPage() {
         pack_size: newProduct.unit,
         stock_quantity: parseInt(newProduct.stock) || 100,
         images: images,
-        status: 'ACTIVE',
+        status: 'PENDING',
       }).unwrap();
-      toast.success('Product added to store catalog! 🛒');
+      toast.success('Product submitted for admin approval! ⏳');
     } catch (err: any) {
       console.error('Add Product Error:', err);
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
@@ -542,8 +624,10 @@ export default function ProductsPage() {
       price: parseFloat(newProduct.price) || 0,
       mrp: parseFloat(newProduct.mrp) || parseFloat(newProduct.price) || 0,
       category: selectedCat?.name || 'Grocery',
+      categoryId: category_id,
       stock: parseInt(newProduct.stock) || 10,
-      isAvailable: true,
+      isAvailable: false,
+      status: 'PENDING',
       unit: newProduct.unit,
       image: newProduct.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
     });
@@ -562,6 +646,10 @@ export default function ProductsPage() {
   };
 
   const handleToggleAvailability = async (prodId: string, currentAvailable: boolean) => {
+    if (!isApproved) {
+      toast.error('Store onboarding approval required to change product availability.');
+      return;
+    }
     try {
       await updateProductApi({
         id: prodId,
@@ -592,17 +680,27 @@ export default function ProductsPage() {
           <button
             onClick={() => {
               if (!isApproved) {
-                setApprovalError(`Store approval is required to add products to inventory. Current status: ${currentStatus || 'NOT_REGISTERED'}`);
+                const msg = `Store onboarding approval is required before using AI Product Copilot. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+                setApprovalError(msg);
+                toast.error(msg);
                 return;
               }
               setApprovalError('');
               setIsAiAssistantOpen(true);
             }}
-            className="px-4 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-sm hover:shadow-md bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white cursor-pointer active:scale-95 group"
+            className={`px-4 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-sm ${
+              isApproved
+                ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white cursor-pointer active:scale-95 group'
+                : 'bg-slate-200 text-slate-500 cursor-not-allowed border border-slate-300'
+            }`}
           >
-            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse group-hover:rotate-12 transition-transform" />
-            <span>AI Product Copilot</span>
-            <span className="px-1.5 py-0.5 text-[9px] bg-white/20 rounded-full font-bold uppercase tracking-wider">
+            {isApproved ? (
+              <Sparkles className="w-4 h-4 text-amber-300 animate-pulse group-hover:rotate-12 transition-transform" />
+            ) : (
+              <Lock className="w-4 h-4 text-slate-400" />
+            )}
+            <span>{isApproved ? 'AI Product Copilot' : 'AI Copilot (Locked)'}</span>
+            <span className={`px-1.5 py-0.5 text-[9px] rounded-full font-bold uppercase tracking-wider ${isApproved ? 'bg-white/20' : 'bg-slate-300 text-slate-600'}`}>
               MCP
             </span>
           </button>
@@ -617,14 +715,14 @@ export default function ProductsPage() {
 
           <button
             onClick={handleAddProductClick}
-            className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-md active:scale-95 cursor-pointer ${
+            className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-md active:scale-95 ${
               isApproved
-                ? 'bg-[#167a46] hover:bg-[#12653a] text-white'
+                ? 'bg-[#167a46] hover:bg-[#12653a] text-white cursor-pointer'
                 : 'bg-slate-200 text-slate-500 cursor-not-allowed'
             }`}
           >
-            <Plus className="w-4 h-4" />
-            <span>Add New Product</span>
+            {isApproved ? <Plus className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+            <span>{isApproved ? 'Add New Product' : 'Add Product (Locked)'}</span>
           </button>
         </div>
       </div>
@@ -647,18 +745,23 @@ export default function ProductsPage() {
 
       {/* Approval Status Warning Banner */}
       {!isApproved && (
-        <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-2xl text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm">
-          <div className="flex items-center space-x-2">
+        <div className="bg-amber-50 border-2 border-amber-300 p-4 rounded-2xl text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-sm animate-in fade-in-50">
+          <div className="flex items-center space-x-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" />
-            <span>
-              <strong>Store Approval Required:</strong> Product inventory management is locked until your store application is approved by Zippy Admin. Status: <strong>{currentStatus || 'NOT_REGISTERED'}</strong>
-            </span>
+            <div>
+              <p className="font-bold text-sm text-amber-950">
+                Store Onboarding Approval Required
+              </p>
+              <p className="text-amber-800 text-xs mt-0.5">
+                Product creation and catalog management is locked until your store onboarding application is approved by Zippy Admin. Status: <strong className="uppercase">{currentStatus || 'NOT_REGISTERED'}</strong>
+              </p>
+            </div>
           </div>
           <Link
             href="/store-request"
-            className="px-4 py-2 bg-amber-950 text-white rounded-xl text-xs font-black hover:bg-black transition-all shrink-0"
+            className="px-4 py-2 bg-amber-950 text-white rounded-xl text-xs font-black hover:bg-black transition-all shrink-0 shadow-sm"
           >
-            Check Store Onboarding 🚀
+            {currentStatus === 'NOT_REGISTERED' ? 'Complete Store Onboarding 🚀' : 'Track Application 📋'}
           </Link>
         </div>
       )}
@@ -666,6 +769,41 @@ export default function ProductsPage() {
       {approvalError && (
         <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-xl text-xs font-bold">
           {approvalError}
+        </div>
+      )}
+
+      {/* Pending Products Alert Banner */}
+      {pendingCount > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-950 shadow-sm animate-in fade-in-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Clock className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-sm text-amber-900">
+                  {pendingCount} Product{pendingCount > 1 ? 's' : ''} Awaiting Admin Approval
+                </h4>
+                <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide bg-amber-200 text-amber-900 rounded-full border border-amber-300">
+                  Under Review
+                </span>
+              </div>
+              <p className="text-xs text-amber-700 mt-0.5 font-medium">
+                Newly created products are being reviewed by Zippy Admin before going live in customer app.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStatusFilter(statusFilter === 'PENDING' ? 'ALL' : 'PENDING')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs shrink-0 cursor-pointer border ${
+              statusFilter === 'PENDING'
+                ? 'bg-amber-600 text-white border-amber-700'
+                : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            {statusFilter === 'PENDING' ? '✕ Show All Products' : 'View Pending Products Only ➔'}
+          </button>
         </div>
       )}
 
@@ -769,6 +907,90 @@ export default function ProductsPage() {
           </div>
         </div>
 
+        {/* Status Filter Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              statusFilter === 'ALL'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <span>All Products</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              {displayProducts.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('PENDING')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              statusFilter === 'PENDING'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-white border border-amber-300 text-amber-800 hover:bg-amber-50'
+            }`}
+          >
+            <Clock className={`w-3.5 h-3.5 ${statusFilter === 'PENDING' ? 'text-white' : 'text-amber-500'}`} />
+            <span>Pending Approval</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${statusFilter === 'PENDING' ? 'bg-white/25 text-white' : 'bg-amber-100 text-amber-900'}`}>
+              {pendingCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ACTIVE')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              statusFilter === 'ACTIVE'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-white border border-emerald-200 text-emerald-800 hover:bg-emerald-50'
+            }`}
+          >
+            <CheckCircle className={`w-3.5 h-3.5 ${statusFilter === 'ACTIVE' ? 'text-white' : 'text-emerald-600'}`} />
+            <span>Active / Live</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusFilter === 'ACTIVE' ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-800'}`}>
+              {activeCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('INACTIVE')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              statusFilter === 'INACTIVE'
+                ? 'bg-slate-700 text-white shadow-xs'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <AlertCircle className={`w-3.5 h-3.5 ${statusFilter === 'INACTIVE' ? 'text-white' : 'text-slate-500'}`} />
+            <span>Out of Stock</span>
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusFilter === 'INACTIVE' ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              {inactiveCount}
+            </span>
+          </button>
+
+          {rejectedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setStatusFilter('REJECTED')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                statusFilter === 'REJECTED'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'bg-white border border-rose-200 text-rose-800 hover:bg-rose-50'
+              }`}
+            >
+              <XCircle className={`w-3.5 h-3.5 ${statusFilter === 'REJECTED' ? 'text-white' : 'text-rose-600'}`} />
+              <span>Rejected</span>
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusFilter === 'REJECTED' ? 'bg-white/25 text-white' : 'bg-rose-100 text-rose-800'}`}>
+                {rejectedCount}
+              </span>
+            </button>
+          )}
+        </div>
+
         {/* Live Voice Recording Status Banner with 2-second Silence Notice */}
         {isRecordingVoice && (
           <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in-50">
@@ -803,8 +1025,8 @@ export default function ProductsPage() {
               </p>
               <p className="text-[11px] text-emerald-700 font-mono">
                 {isVoiceSearching
-                  ? 'Tool: search_products_from_voice_tool @ 192.168.1.75:8000/mcp'
-                  : 'Tool: search_products_tool @ 192.168.1.75:8000/mcp'}
+                  ? 'Tool: search_products_from_voice_tool @ zippy-mcp.elyriasoft.com/mcp'
+                  : 'Tool: search_products_tool @ zippy-mcp.elyriasoft.com/mcp'}
               </p>
             </div>
           </div>
@@ -898,9 +1120,13 @@ export default function ProductsPage() {
               className={`white-card p-5 space-y-4 relative overflow-hidden transition-all flex flex-col justify-between shadow-sm border ${
                 product.isExistingInStore === false
                   ? 'border-emerald-300 bg-emerald-50/15'
+                  : product.status === 'PENDING'
+                  ? 'border-amber-300 bg-amber-50/20'
+                  : product.status === 'REJECTED'
+                  ? 'border-rose-300 bg-rose-50/25'
                   : !product.isAvailable
-                  ? 'opacity-70 border-rose-200 bg-rose-50/20'
-                  : 'border-slate-200'
+                  ? 'opacity-75 border-slate-300 bg-slate-50/50'
+                  : 'border-slate-200 hover:border-emerald-300'
               }`}
             >
               <div className="space-y-3">
@@ -929,21 +1155,41 @@ export default function ProductsPage() {
                     </div>
                   )}
 
-                  {/* Availability Badge */}
+                  {/* Status / Availability Badge */}
                   <div className="absolute top-3 right-3">
                     {product.isExistingInStore === false ? (
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md bg-amber-500 border-amber-400 text-white">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md bg-amber-500 border-amber-400 text-white shadow-xs">
                         MCP CATALOG
+                      </span>
+                    ) : product.status === 'PENDING' ? (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md bg-amber-500/95 border-amber-400 text-white flex items-center gap-1 shadow-xs animate-pulse">
+                        <Clock className="w-3 h-3" />
+                        <span>PENDING APPROVAL</span>
+                      </span>
+                    ) : product.status === 'REJECTED' ? (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md bg-rose-600 border-rose-500 text-white flex items-center gap-1 shadow-xs">
+                        <XCircle className="w-3 h-3" />
+                        <span>REJECTED</span>
                       </span>
                     ) : (
                       <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md ${
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md flex items-center gap-1 shadow-xs ${
                           product.isAvailable
                             ? 'bg-emerald-600 border-emerald-500 text-white'
-                            : 'bg-rose-600 border-rose-500 text-white'
+                            : 'bg-slate-600 border-slate-500 text-white'
                         }`}
                       >
-                        {product.isAvailable ? 'IN STOCK' : 'OUT OF STOCK'}
+                        {product.isAvailable ? (
+                          <>
+                            <CheckCircle className="w-3 h-3" />
+                            <span>IN STOCK</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="w-3 h-3" />
+                            <span>OUT OF STOCK</span>
+                          </>
+                        )}
                       </span>
                     )}
                   </div>
@@ -963,6 +1209,21 @@ export default function ProductsPage() {
                   )}
                   <span className="text-xs text-slate-600 font-bold ml-auto">Stock: {product.stock}</span>
                 </div>
+
+                {/* Pending / Rejection Banner inside Card */}
+                {product.status === 'PENDING' && product.isExistingInStore !== false && (
+                  <div className="bg-amber-100/70 border border-amber-300/80 rounded-xl px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-bold text-amber-900">
+                    <Clock className="w-3.5 h-3.5 shrink-0 text-amber-600 animate-spin" />
+                    <span>Pending Admin Review — will go live once approved</span>
+                  </div>
+                )}
+
+                {product.status === 'REJECTED' && product.isExistingInStore !== false && (
+                  <div className="bg-rose-100/70 border border-rose-300/80 rounded-xl px-2.5 py-1.5 text-[11px] text-rose-800">
+                    <span className="font-bold text-rose-900">Admin Rejection: </span>
+                    <span>{product.rejectionReason || 'Pricing or details need correction'}</span>
+                  </div>
+                )}
               </div>
 
               {/* Card Bottom Actions */}
@@ -998,21 +1259,33 @@ export default function ProductsPage() {
                       </button>
                     </div>
 
-                    <div className="flex items-center space-x-2">
-                      <span className="text-[11px] font-semibold text-slate-500">In-Stock:</span>
-                      <button
-                        onClick={() => handleToggleAvailability(product.id, product.isAvailable)}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
-                          product.isAvailable ? 'bg-[#167a46]' : 'bg-slate-300'
-                        }`}
-                      >
-                        <span
-                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
-                            product.isAvailable ? 'translate-x-4' : 'translate-x-0.5'
+                    {product.status === 'PENDING' ? (
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-100/80 px-2.5 py-1 rounded-lg border border-amber-300">
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Awaiting Approval</span>
+                      </div>
+                    ) : product.status === 'REJECTED' ? (
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-rose-800 bg-rose-100/80 px-2.5 py-1 rounded-lg border border-rose-300">
+                        <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Rejected</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[11px] font-semibold text-slate-500">In-Stock:</span>
+                        <button
+                          onClick={() => handleToggleAvailability(product.id, product.isAvailable)}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
+                            product.isAvailable ? 'bg-[#167a46]' : 'bg-slate-300'
                           }`}
-                        />
-                      </button>
-                    </div>
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
+                              product.isAvailable ? 'translate-x-4' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -1277,21 +1550,36 @@ export default function ProductsPage() {
         isStoreApproved={isApproved}
         onCatalogRefresh={() => refetchProducts()}
         onAddProduct={async (payload) => {
-          const res = await addProductApi(payload).unwrap();
+          if (!isApproved) {
+            const msg = `Store onboarding approval is required before adding products! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
+            toast.error(msg);
+            throw new Error(msg);
+          }
+          const res = await addProductApi({
+            ...payload,
+            status: payload.status || 'PENDING',
+          }).unwrap();
           // Update local store for instant UI feedback
           addProduct({
             name: payload.name,
             price: Number(payload.mrp) || 0,
             mrp: Number(payload.mrp) || 0,
             category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
+            categoryId: payload.category_id,
             stock: Number(payload.stock_quantity) || 50,
-            isAvailable: true,
+            isAvailable: false,
+            status: 'PENDING',
             unit: payload.unit || '1 kg',
             image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
           });
+          toast.success('Product submitted for admin approval! ⏳');
           return res;
         }}
         onOpenManualModal={(prod) => {
+          if (!isApproved) {
+            toast.error('Store onboarding approval required to add products.');
+            return;
+          }
           setIsAiAssistantOpen(false);
           const catObj = categoriesList.find(
             (c: any) => c.id === prod.category_id || c.name === prod.category_name

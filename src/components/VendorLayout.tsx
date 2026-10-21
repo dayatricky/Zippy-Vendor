@@ -170,11 +170,13 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
     badge?: string;
   }
 
+  const isStoreApproved = currentApprovalStatus === 'APPROVED';
+
   const navItems: NavItem[] = [
     { label: 'Overview', href: '/', icon: LayoutDashboard },
-    { label: 'Store Onboarding', href: '/store-request', icon: Store },
-    { label: 'Categories', href: '/categories', icon: Grid },
-    { label: 'Products Catalog', href: '/products', icon: Package },
+    { label: 'Store Onboarding', href: '/store-request', icon: Store, badge: isStoreApproved ? 'Approved' : 'Required' },
+    { label: 'Categories', href: '/categories', icon: Grid, badge: isStoreApproved ? undefined : 'Locked' },
+    { label: 'Products Catalog', href: '/products', icon: Package, badge: isStoreApproved ? undefined : 'Locked' },
     { label: 'Orders Stream', href: '/orders', icon: ShoppingBag },
     { label: 'Earnings & Payouts', href: '/payouts', icon: Wallet },
     { label: 'Store Settings', href: '/settings', icon: Settings },
