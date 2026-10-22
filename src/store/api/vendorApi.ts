@@ -49,7 +49,7 @@ export const vendorApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts'],
+  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts', 'Returns'],
   endpoints: (builder) => ({
     // Auth Endpoints matching Swagger Specs
     vendorSignup: builder.mutation<{ success: boolean; message: string; data?: any }, VendorSignupPayload>({
@@ -352,6 +352,135 @@ export const vendorApi = createApi({
       }),
       invalidatesTags: ['Payouts'],
     }),
+
+    // Returns & Exchange Management Endpoints (/vendor/returns)
+    // GET /api/v1/vendor/returns — list requests for your store items
+    getReturns: builder.query<
+      { success?: boolean; data: any; items?: any; returns?: any },
+      {
+        status?: string;
+        type?: string;
+        search?: string;
+        page?: number;
+        limit?: number;
+      } | void
+    >({
+      query: (params) => ({
+        url: '/vendor/returns',
+        params: params || {},
+      }),
+      providesTags: ['Returns'],
+    }),
+
+    // GET /api/v1/vendor/returns/:id — view a single return request
+    getReturnDetails: builder.query<{ success?: boolean; data: any }, string>({
+      query: (returnId) => `/vendor/returns/${returnId}`,
+      providesTags: (_result, _error, id) => [{ type: 'Returns', id }],
+    }),
+
+    // PATCH /api/v1/vendor/returns/items/:itemId/status — approve/reject or update workflow status
+    updateReturnItemStatus: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      {
+        itemId?: string;
+        returnId?: string;
+        status: string;
+        remarks?: string;
+        rejectionReason?: string;
+        rejection_reason?: string;
+        reason?: string;
+        vendor_notes?: string;
+        refundAmount?: number;
+        refund_amount?: number;
+        pickupDate?: string;
+        pickup_date?: string;
+        pickupPartner?: string;
+        pickup_partner?: string;
+        trackingNumber?: string;
+        tracking_number?: string;
+        exchangeItem?: string;
+      }
+    >({
+      query: ({ itemId, returnId, ...body }) => {
+        const targetId = itemId || returnId;
+        const payload: Record<string, any> = {
+          status: body.status,
+        };
+        const rejectionReason =
+          body.rejection_reason ||
+          body.rejectionReason ||
+          body.reason ||
+          body.remarks ||
+          body.vendor_notes;
+        if (rejectionReason) {
+          payload.rejection_reason = rejectionReason;
+        }
+        if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
+          payload.refund_amount = body.refund_amount ?? body.refundAmount;
+        }
+        if (body.tracking_number || body.trackingNumber) {
+          payload.tracking_number = body.tracking_number || body.trackingNumber;
+        }
+        return {
+          url: `/vendor/returns/items/${targetId}/status`,
+          method: 'PATCH',
+          body: payload,
+        };
+      },
+      invalidatesTags: ['Returns'],
+    }),
+
+    // Backward compatible alias
+    updateReturnStatus: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      {
+        itemId?: string;
+        returnId?: string;
+        status: string;
+        remarks?: string;
+        rejectionReason?: string;
+        rejection_reason?: string;
+        reason?: string;
+        vendor_notes?: string;
+        refundAmount?: number;
+        refund_amount?: number;
+        pickupDate?: string;
+        pickup_date?: string;
+        pickupPartner?: string;
+        pickup_partner?: string;
+        trackingNumber?: string;
+        tracking_number?: string;
+        exchangeItem?: string;
+      }
+    >({
+      query: ({ itemId, returnId, ...body }) => {
+        const targetId = itemId || returnId;
+        const payload: Record<string, any> = {
+          status: body.status,
+        };
+        const rejectionReason =
+          body.rejection_reason ||
+          body.rejectionReason ||
+          body.reason ||
+          body.remarks ||
+          body.vendor_notes;
+        if (rejectionReason) {
+          payload.rejection_reason = rejectionReason;
+        }
+        if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
+          payload.refund_amount = body.refund_amount ?? body.refundAmount;
+        }
+        if (body.tracking_number || body.trackingNumber) {
+          payload.tracking_number = body.tracking_number || body.trackingNumber;
+        }
+        return {
+          url: `/vendor/returns/items/${targetId}/status`,
+          method: 'PATCH',
+          body: payload,
+        };
+      },
+      invalidatesTags: ['Returns'],
+    }),
   }),
 });
 
@@ -380,4 +509,8 @@ export const {
   useUpdateOrderStatusMutation,
   useGetPayoutsQuery,
   useRequestPayoutMutation,
+  useGetReturnsQuery,
+  useGetReturnDetailsQuery,
+  useUpdateReturnItemStatusMutation,
+  useUpdateReturnStatusMutation,
 } = vendorApi;

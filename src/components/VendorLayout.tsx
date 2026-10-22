@@ -22,6 +22,7 @@ import {
   Store,
   ArrowRight,
   ShieldAlert,
+  RotateCcw,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import { useAppDispatch, useAppSelector } from '@/store';
@@ -178,6 +179,7 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
     { label: 'Categories', href: '/categories', icon: Grid, badge: isStoreApproved ? undefined : 'Locked' },
     { label: 'Products Catalog', href: '/products', icon: Package, badge: isStoreApproved ? undefined : 'Locked' },
     { label: 'Orders Stream', href: '/orders', icon: ShoppingBag },
+    { label: 'Returns & Exchange', href: '/returns', icon: RotateCcw, badge: isStoreApproved ? undefined : 'Locked' },
     { label: 'Earnings & Payouts', href: '/payouts', icon: Wallet },
     { label: 'Store Settings', href: '/settings', icon: Settings },
   ];
