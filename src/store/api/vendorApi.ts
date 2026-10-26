@@ -2,11 +2,25 @@ import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import { VendorProfile, CategoryItem, Product, Order, PayoutRequest } from '../useVendorStore';
 
 const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
-const API_BASE_URL = rawBaseUrl.endsWith('/api/v1')
+export const API_BASE_URL = rawBaseUrl.endsWith('/api/v1')
   ? rawBaseUrl
   : rawBaseUrl.endsWith('/api')
   ? `${rawBaseUrl}/v1`
   : `${rawBaseUrl}/api/v1`;
+
+export const getReturnEvidenceUrl = (itemId: string, filename: string): string => {
+  if (!itemId || !filename) return '';
+  if (
+    filename.startsWith('http://') ||
+    filename.startsWith('https://') ||
+    filename.startsWith('data:') ||
+    filename.startsWith('blob:')
+  ) {
+    return filename;
+  }
+  const clean = filename.replace(/^\/+/, '');
+  return `${API_BASE_URL}/vendor/returns/items/${itemId}/evidence/${encodeURIComponent(clean)}`;
+};
 
 export interface VendorSignupPayload {
   email: string;
@@ -49,7 +63,7 @@ export const vendorApi = createApi({
       return headers;
     },
   }),
-  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts', 'Returns'],
+  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts', 'Returns', 'Withdrawals'],
   endpoints: (builder) => ({
     // Auth Endpoints matching Swagger Specs
     vendorSignup: builder.mutation<{ success: boolean; message: string; data?: any }, VendorSignupPayload>({
@@ -338,19 +352,131 @@ export const vendorApi = createApi({
       invalidatesTags: ['Orders'],
     }),
 
-    // Payouts Ledger Endpoints
-    getPayouts: builder.query<{ data: PayoutRequest[] }, void>({
-      query: () => '/vendor/payouts',
-      providesTags: ['Payouts'],
+    // ==========================================
+    // VENDOR WITHDRAWALS (Swagger Specifications)
+    // 1. GET /api/v1/vendor/withdrawals/balance
+    // 2. GET /api/v1/vendor/withdrawals/history
+    // 3. POST /api/v1/vendor/withdrawals/request
+    // ==========================================
+
+    // 1. GET /api/v1/vendor/withdrawals/balance — eligible balance for withdrawal
+    getWithdrawalBalance: builder.query<
+      {
+        success?: boolean;
+        balance?: number | string;
+        eligible_balance?: number | string;
+        available_balance?: number | string;
+        total_amount?: number | string;
+        amount?: number | string;
+        data?: any;
+      },
+      void
+    >({
+      query: () => '/vendor/withdrawals/balance',
+      providesTags: ['Withdrawals', 'Payouts'],
     }),
 
-    requestPayout: builder.mutation<{ success: boolean; data: PayoutRequest }, { amount: number }>({
-      query: (body) => ({
-        url: '/vendor/payouts/request',
+    // 2. GET /api/v1/vendor/withdrawals/history — withdrawal history and order records
+    getWithdrawalHistory: builder.query<
+      {
+        success?: boolean;
+        data?: any;
+        pending?: {
+          total_amount?: string | number;
+          records?: any[];
+        };
+        withdrawals?: any[];
+        requests?: any[];
+        records?: any[];
+      },
+      void
+    >({
+      query: () => '/vendor/withdrawals/history',
+      providesTags: ['Withdrawals', 'Payouts'],
+    }),
+
+    // 3. POST /api/v1/vendor/withdrawals/request — submit withdrawal request (Strictly { "amount": 500 })
+    requestWithdrawal: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      {
+        amount: number;
+        [key: string]: any;
+      }
+    >({
+      query: ({ amount }) => ({
+        url: '/vendor/withdrawals/request',
         method: 'POST',
-        body,
+        body: {
+          amount: Number(amount),
+        },
       }),
-      invalidatesTags: ['Payouts'],
+      invalidatesTags: ['Withdrawals', 'Payouts', 'Orders'],
+    }),
+
+    // Aliases for compatibility
+    getWithdrawals: builder.query<{ success?: boolean; data?: any; pending?: any; withdrawals?: any; requests?: any }, void>({
+      query: () => '/vendor/withdrawals/history',
+      providesTags: ['Withdrawals', 'Payouts'],
+    }),
+
+    createWithdrawal: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      {
+        amount?: number;
+        order_ids?: string[];
+        notes?: string;
+        [key: string]: any;
+      }
+    >({
+      query: ({ amount, ...rest }) => ({
+        url: '/vendor/withdrawals/request',
+        method: 'POST',
+        body: {
+          amount: Number(amount || 0),
+          ...rest,
+        },
+      }),
+      invalidatesTags: ['Withdrawals', 'Payouts', 'Orders'],
+    }),
+
+    getWithdrawalEarnings: builder.query<
+      {
+        success?: boolean;
+        data?: any;
+        earnings?: any;
+        gross_amount?: number;
+        commission?: number;
+        net_amount?: number;
+        order_count?: number;
+        orders?: any[];
+      },
+      { start_date?: string; end_date?: string; startDate?: string; endDate?: string } | void
+    >({
+      query: () => '/vendor/withdrawals/history',
+      providesTags: ['Withdrawals', 'Orders'],
+    }),
+
+    getPayouts: builder.query<{ data?: any; payouts?: any; items?: any; success?: boolean }, void>({
+      query: () => '/vendor/withdrawals/history',
+      providesTags: ['Withdrawals', 'Payouts'],
+    }),
+
+    requestPayout: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      {
+        amount?: number;
+        [key: string]: any;
+      }
+    >({
+      query: (body) => ({
+        url: '/vendor/withdrawals/request',
+        method: 'POST',
+        body: {
+          amount: Number(body.amount || 0),
+          ...body,
+        },
+      }),
+      invalidatesTags: ['Withdrawals', 'Payouts', 'Orders'],
     }),
 
     // Returns & Exchange Management Endpoints (/vendor/returns)
@@ -376,6 +502,17 @@ export const vendorApi = createApi({
     getReturnDetails: builder.query<{ success?: boolean; data: any }, string>({
       query: (returnId) => `/vendor/returns/${returnId}`,
       providesTags: (_result, _error, id) => [{ type: 'Returns', id }],
+    }),
+
+    // GET /api/v1/vendor/returns/items/:itemId/evidence/:filename — fetch evidence asset
+    getReturnItemEvidence: builder.query<string, { itemId: string; filename: string }>({
+      query: ({ itemId, filename }) => ({
+        url: `/vendor/returns/items/${itemId}/evidence/${encodeURIComponent(filename.replace(/^\/+/, ''))}`,
+        responseHandler: async (response) => {
+          const blob = await response.blob();
+          return URL.createObjectURL(blob);
+        },
+      }),
     }),
 
     // PATCH /api/v1/vendor/returns/items/:itemId/status — approve/reject or update workflow status
@@ -409,12 +546,18 @@ export const vendorApi = createApi({
         const rejectionReason =
           body.rejection_reason ||
           body.rejectionReason ||
-          body.reason ||
-          body.remarks ||
-          body.vendor_notes;
-        if (rejectionReason) {
+          body.reason;
+
+        // In Swagger schema:
+        // status: "APPROVED" | "REJECTED"
+        // rejection_reason: "The item is outside the return policy"
+        if (body.status === 'REJECTED') {
+          payload.rejection_reason =
+            rejectionReason || body.remarks || body.vendor_notes || 'The item is outside the return policy';
+        } else if (rejectionReason && body.status !== 'APPROVED') {
           payload.rejection_reason = rejectionReason;
         }
+
         if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
           payload.refund_amount = body.refund_amount ?? body.refundAmount;
         }
@@ -461,12 +604,15 @@ export const vendorApi = createApi({
         const rejectionReason =
           body.rejection_reason ||
           body.rejectionReason ||
-          body.reason ||
-          body.remarks ||
-          body.vendor_notes;
-        if (rejectionReason) {
+          body.reason;
+
+        if (body.status === 'REJECTED') {
+          payload.rejection_reason =
+            rejectionReason || body.remarks || body.vendor_notes || 'The item is outside the return policy';
+        } else if (rejectionReason && body.status !== 'APPROVED') {
           payload.rejection_reason = rejectionReason;
         }
+
         if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
           payload.refund_amount = body.refund_amount ?? body.refundAmount;
         }
@@ -507,10 +653,17 @@ export const {
   useGetOrdersQuery,
   useGetOrderDetailsQuery,
   useUpdateOrderStatusMutation,
+  useGetWithdrawalBalanceQuery,
+  useGetWithdrawalHistoryQuery,
+  useRequestWithdrawalMutation,
+  useGetWithdrawalsQuery,
+  useGetWithdrawalEarningsQuery,
+  useCreateWithdrawalMutation,
   useGetPayoutsQuery,
   useRequestPayoutMutation,
   useGetReturnsQuery,
   useGetReturnDetailsQuery,
+  useGetReturnItemEvidenceQuery,
   useUpdateReturnItemStatusMutation,
   useUpdateReturnStatusMutation,
 } = vendorApi;

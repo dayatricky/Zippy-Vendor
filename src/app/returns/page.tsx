@@ -44,6 +44,8 @@ import {
   useGetReturnDetailsQuery,
   useUpdateReturnItemStatusMutation,
   useUpdateReturnStatusMutation,
+  getReturnEvidenceUrl,
+  API_BASE_URL,
 } from '@/store/api/vendorApi';
 
 export type ReturnType = 'RETURN' | 'EXCHANGE';
@@ -759,6 +761,7 @@ export default function ReturnsPage() {
   const [isRefundOpen, setIsRefundOpen] = useState(false);
   const [isDispatchExchangeOpen, setIsDispatchExchangeOpen] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form states for modals
   const [approveForm, setApproveForm] = useState({
@@ -820,6 +823,52 @@ export default function ReturnsPage() {
     selectedReturn?.returnId || selectedReturn?.id || '',
     { skip: !(selectedReturn?.returnId || selectedReturn?.id) || !isDetailOpen }
   );
+
+  // Enrich selectedReturn with deep details from GET /api/v1/vendor/returns/:id
+  useEffect(() => {
+    if (!apiSingleReturnData || !isDetailOpen || !selectedReturn) return;
+    const detail = (apiSingleReturnData as any)?.data || apiSingleReturnData;
+    if (!detail) return;
+
+    const targetItem = Array.isArray(detail.items)
+      ? detail.items.find((it: any) => String(it.id) === String(selectedReturn.itemId)) || detail.items[0]
+      : null;
+
+    if (targetItem) {
+      const rawEvidenceList: any[] = [
+        ...(Array.isArray(targetItem?.evidence) ? targetItem.evidence : []),
+        ...(Array.isArray(targetItem?.evidence_urls) ? targetItem.evidence_urls : []),
+        ...(Array.isArray(targetItem?.evidence_files) ? targetItem.evidence_files : []),
+        ...(Array.isArray(targetItem?.images) ? targetItem.images : []),
+        ...(Array.isArray(detail.evidence) ? detail.evidence : []),
+        ...(Array.isArray(detail.evidence_urls) ? detail.evidence_urls : []),
+        ...(Array.isArray(detail.images) ? detail.images : []),
+      ];
+      const additionalImages = rawEvidenceList
+        .map((ev) => {
+          const fn = typeof ev === 'string' ? ev : ev.filename || ev.url || ev.name || '';
+          return getReturnEvidenceUrl(selectedReturn.itemId || '', fn);
+        })
+        .filter(Boolean);
+
+      setSelectedReturn((prev) => {
+        if (!prev) return prev;
+        const mergedImages = Array.from(new Set([...(prev.reason.images || []), ...additionalImages]));
+        return {
+          ...prev,
+          reason: {
+            ...prev.reason,
+            images: mergedImages.length > 0 ? mergedImages : prev.reason.images,
+          },
+          review: {
+            ...prev.review,
+            rejectionReason: targetItem.rejection_reason || detail.rejection_reason || prev.review?.rejectionReason,
+            reviewedAt: targetItem.reviewed_at || prev.review?.reviewedAt,
+          },
+        };
+      });
+    }
+  }, [apiSingleReturnData, isDetailOpen]);
 
   // 3. PATCH /api/v1/vendor/returns/items/:itemId/status — approve/reject or update workflow status
   const [updateReturnStatusApi] = useUpdateReturnStatusMutation();
@@ -983,15 +1032,27 @@ export default function ReturnsPage() {
             r.customer_notes ||
             (typeof rawReason === 'string' ? `Customer stated: ${rawReason}` : 'Customer requested return for this item.');
 
-          const reasonImages: string[] = Array.isArray(firstItem?.evidence_urls) && firstItem.evidence_urls.length > 0
-            ? firstItem.evidence_urls
-            : Array.isArray(r.evidence_urls) && r.evidence_urls.length > 0
-            ? r.evidence_urls
-            : Array.isArray(rawReason?.images) && rawReason.images.length > 0
-            ? rawReason.images
-            : Array.isArray(r.images) && r.images.length > 0
-            ? r.images
-            : [];
+          const rawEvidenceList: any[] = [
+            ...(Array.isArray(firstItem?.evidence) ? firstItem.evidence : []),
+            ...(Array.isArray(firstItem?.evidence_urls) ? firstItem.evidence_urls : []),
+            ...(Array.isArray(firstItem?.evidence_files) ? firstItem.evidence_files : []),
+            ...(Array.isArray(firstItem?.evidences) ? firstItem.evidences : []),
+            ...(Array.isArray(firstItem?.images) ? firstItem.images : []),
+            ...(Array.isArray(r.evidence) ? r.evidence : []),
+            ...(Array.isArray(r.evidence_urls) ? r.evidence_urls : []),
+            ...(Array.isArray(r.evidence_files) ? r.evidence_files : []),
+            ...(Array.isArray(rawReason?.images) ? rawReason.images : []),
+            ...(Array.isArray(r.images) ? r.images : []),
+          ];
+
+          const reasonImages: string[] = rawEvidenceList
+            .map((item) => {
+              if (!item) return '';
+              const filename = typeof item === 'string' ? item : item.filename || item.url || item.path || item.name || '';
+              if (!filename) return '';
+              return getReturnEvidenceUrl(itemId, filename);
+            })
+            .filter(Boolean);
 
           // Refund details
           const payableRefund = Number(
@@ -1205,27 +1266,30 @@ export default function ReturnsPage() {
 
     setReturnsList(updated);
     setIsApproveOpen(false);
-    toast.success(`Request ${selectedReturn.returnNumber} Approved! Pickup scheduled.`);
+    setIsSubmitting(true);
 
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
       await updateReturnStatusApi({
         itemId: targetItemId,
-        returnId: selectedReturn.id,
+        returnId: selectedReturn.returnId || selectedReturn.id,
         status: 'APPROVED',
         remarks: approveForm.vendorNotes,
-        pickupPartner: approveForm.pickupPartner,
-        pickupDate: approveForm.pickupDate,
       }).unwrap();
-    } catch (e) {
-      // Local state already updated
+      toast.success(`Request ${selectedReturn.returnNumber} Approved on server! Pickup scheduled.`);
+      refetchReturns();
+    } catch (e: any) {
+      console.warn('API sync notice:', e);
+      toast.success(`Request ${selectedReturn.returnNumber} Approved! Pickup scheduled.`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleOpenReject = (r: ReturnRequest) => {
     setSelectedReturn(r);
     setRejectForm({
-      rejectionReason: 'Policy violation: Return claimed after 7-day window or customer mishandling',
+      rejectionReason: 'The item is outside the return policy',
       customRemarks: '',
       confirmedCheckedProof: false,
     });
@@ -1275,22 +1339,25 @@ export default function ReturnsPage() {
 
     setReturnsList(updated);
     setIsRejectOpen(false);
-    toast.error(`Request ${selectedReturn.returnNumber} has been rejected.`);
+    setIsSubmitting(true);
 
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
+      const finalReason = `${rejectForm.rejectionReason}${rejectForm.customRemarks ? ': ' + rejectForm.customRemarks : ''}`;
       await updateReturnStatusApi({
         itemId: targetItemId,
-        returnId: selectedReturn.id,
+        returnId: selectedReturn.returnId || selectedReturn.id,
         status: 'REJECTED',
-        rejectionReason: rejectForm.rejectionReason,
-        rejection_reason: rejectForm.rejectionReason,
-        reason: rejectForm.rejectionReason,
-        remarks: rejectForm.customRemarks,
-        vendor_notes: rejectForm.customRemarks,
+        rejection_reason: finalReason,
+        reason: finalReason,
       }).unwrap();
-    } catch (e) {
-      // Local state updated
+      toast.error(`Request ${selectedReturn.returnNumber} rejected on server.`);
+      refetchReturns();
+    } catch (e: any) {
+      console.warn('API sync notice:', e);
+      toast.error(`Request ${selectedReturn.returnNumber} has been rejected.`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -2467,6 +2534,44 @@ export default function ReturnsPage() {
                 </div>
               </div>
 
+              {/* Customer Stated Reason & Attached Evidence */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-extrabold text-amber-900">{selectedReturn.reason.title}</span>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-200 text-amber-900">
+                    {selectedReturn.reason.category}
+                  </span>
+                </div>
+                {selectedReturn.reason.customerNotes && (
+                  <p className="text-[11px] text-slate-700 italic">
+                    "{selectedReturn.reason.customerNotes}"
+                  </p>
+                )}
+                {selectedReturn.reason.images && selectedReturn.reason.images.length > 0 && (
+                  <div className="pt-1">
+                    <div className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                      <Eye className="w-3 h-3 text-amber-700" />
+                      <span>Customer Proof Photos ({selectedReturn.reason.images.length}) • Click to inspect</span>
+                    </div>
+                    <div className="flex items-center gap-2 overflow-x-auto py-1">
+                      {selectedReturn.reason.images.map((img, idx) => (
+                        <img
+                          key={idx}
+                          src={img}
+                          alt="Customer evidence"
+                          onClick={() => setLightboxImage(img)}
+                          className="w-12 h-12 rounded-xl object-cover border border-amber-300 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src =
+                              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=300&auto=format&fit=crop&q=80';
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Pickup Logistics Partner */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-700">Doorstep Logistics Courier</label>
@@ -2551,10 +2656,16 @@ export default function ReturnsPage() {
                 Cancel
               </button>
               <button
+                disabled={isSubmitting}
                 onClick={handleConfirmApprove}
-                className="px-5 py-2.5 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white text-xs font-black shadow-md hover:shadow-lg transition-all"
+                className="px-5 py-2.5 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white text-xs font-black shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
               >
-                Confirm & Schedule Pickup
+                {isSubmitting ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>{isSubmitting ? 'Approving on Server...' : 'Confirm & Schedule Pickup'}</span>
               </button>
             </div>
           </div>
@@ -2595,6 +2706,44 @@ export default function ReturnsPage() {
                 </span>
               </div>
 
+              {/* Customer Stated Reason & Attached Evidence */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-extrabold text-amber-900">{selectedReturn.reason.title}</span>
+                  <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-amber-200 text-amber-900">
+                    {selectedReturn.reason.category}
+                  </span>
+                </div>
+                {selectedReturn.reason.customerNotes && (
+                  <p className="text-[11px] text-slate-700 italic">
+                    "{selectedReturn.reason.customerNotes}"
+                  </p>
+                )}
+                {selectedReturn.reason.images && selectedReturn.reason.images.length > 0 && (
+                  <div className="pt-1">
+                    <div className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                      <Eye className="w-3 h-3 text-amber-700" />
+                      <span>Customer Proof Photos ({selectedReturn.reason.images.length}) • Click to inspect</span>
+                    </div>
+                    <div className="flex items-center gap-2 overflow-x-auto py-1">
+                      {selectedReturn.reason.images.map((img, idx) => (
+                        <img
+                          key={idx}
+                          src={img}
+                          alt="Customer evidence"
+                          onClick={() => setLightboxImage(img)}
+                          className="w-12 h-12 rounded-xl object-cover border border-amber-300 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src =
+                              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=300&auto=format&fit=crop&q=80';
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Reason Selector */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-700">Predefined Rejection Reason</label>
@@ -2603,6 +2752,9 @@ export default function ReturnsPage() {
                   onChange={(e) => setRejectForm({ ...rejectForm, rejectionReason: e.target.value })}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
                 >
+                  <option value="The item is outside the return policy">
+                    The item is outside the return policy
+                  </option>
                   <option value="Policy violation: Return claimed after 7-day window">
                     Return claimed after return policy window (&gt; 7 days)
                   </option>
@@ -2658,10 +2810,16 @@ export default function ReturnsPage() {
                 Cancel
               </button>
               <button
+                disabled={isSubmitting}
                 onClick={handleConfirmReject}
-                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md transition-all"
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
               >
-                Confirm Rejection
+                {isSubmitting ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <XCircle className="w-4 h-4" />
+                )}
+                <span>{isSubmitting ? 'Rejecting on Server...' : 'Confirm Rejection'}</span>
               </button>
             </div>
           </div>

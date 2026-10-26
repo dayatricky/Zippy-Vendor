@@ -180,7 +180,7 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
     { label: 'Products Catalog', href: '/products', icon: Package, badge: isStoreApproved ? undefined : 'Locked' },
     { label: 'Orders Stream', href: '/orders', icon: ShoppingBag },
     { label: 'Returns & Exchange', href: '/returns', icon: RotateCcw, badge: isStoreApproved ? undefined : 'Locked' },
-    { label: 'Earnings & Payouts', href: '/payouts', icon: Wallet },
+    { label: 'Withdrawals & Payouts', href: '/withdrawals', icon: Wallet },
     { label: 'Store Settings', href: '/settings', icon: Settings },
   ];
 
@@ -302,7 +302,10 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
         {/* Navigation Items List */}
         <nav className="flex-1 py-4 px-3 space-y-1.5 overflow-y-auto">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+            const isActive =
+              pathname === item.href ||
+              (item.href !== '/' && pathname.startsWith(item.href)) ||
+              (item.href === '/withdrawals' && pathname.startsWith('/payouts'));
             const Icon = item.icon;
             return (
               <Link
