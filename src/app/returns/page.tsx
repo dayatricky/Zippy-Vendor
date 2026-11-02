@@ -37,6 +37,8 @@ import {
   CreditCard,
   Building,
   Maximize2,
+  Loader2,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   useGetStoreRequestQuery,
@@ -737,6 +739,115 @@ const INITIAL_RETURNS: ReturnRequest[] = [
   },
 ];
 
+interface EvidenceImageProps {
+  src: string;
+  alt?: string;
+  className?: string;
+  onClick?: (effectiveSrc: string) => void;
+  showZoomIcon?: boolean;
+}
+
+const EvidenceImage: React.FC<EvidenceImageProps> = ({
+  src,
+  alt = 'Customer proof photo',
+  className = '',
+  onClick,
+  showZoomIcon = false,
+}) => {
+  const [blobSrc, setBlobSrc] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [hasError, setHasError] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!src || typeof src !== 'string' || !src.trim()) {
+      setIsLoading(false);
+      setHasError(true);
+      return;
+    }
+
+    const trimmed = src.trim();
+
+    // Direct images that don't need token (data URI or blob)
+    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+      setBlobSrc(trimmed);
+      setIsLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchBlobWithAuth = async () => {
+      try {
+        setIsLoading(true);
+        setHasError(false);
+
+        const token = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+        const headers: Record<string, string> = {};
+        if (token && (trimmed.includes('/vendor/') || trimmed.includes('/api/'))) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const res = await fetch(trimmed, { headers });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        if (isMounted) {
+          const objectUrl = URL.createObjectURL(blob);
+          setBlobSrc(objectUrl);
+          setIsLoading(false);
+        }
+      } catch {
+        if (isMounted) {
+          // If authenticated blob fetch fails, fallback to direct src
+          setBlobSrc(trimmed);
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchBlobWithAuth();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [src]);
+
+  const effectiveSrc = blobSrc || src;
+
+  return (
+    <div
+      onClick={() => onClick?.(effectiveSrc)}
+      className={`relative group overflow-hidden ${onClick ? 'cursor-pointer' : ''}`}
+    >
+      {isLoading ? (
+        <div className={`flex items-center justify-center bg-slate-100 animate-pulse ${className}`}>
+          <Loader2 className="w-4 h-4 text-[#167a46] animate-spin" />
+        </div>
+      ) : (
+        <img
+          src={effectiveSrc}
+          alt={alt}
+          onError={(e) => {
+            if (!hasError) {
+              setHasError(true);
+              (e.currentTarget as HTMLImageElement).src =
+                'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
+            }
+          }}
+          className={className}
+        />
+      )}
+
+      {showZoomIcon && !isLoading && !hasError && (
+        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white pointer-events-none">
+          <Maximize2 className="w-4 h-4" />
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function ReturnsPage() {
   const [returnsList, setReturnsList] = useState<ReturnRequest[]>([]);
 
@@ -918,43 +1029,54 @@ export default function ReturnsPage() {
           const returnNumber = r.return_number || r.returnNumber || `RET-${retId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`;
 
           // Product & Order item mapping
-          const orderItem = firstItem?.order_item || firstItem?.orderItem || firstItem?.product || firstItem || {};
+          const orderItem =
+            firstItem?.storeItem?.product ||
+            firstItem?.storeItem ||
+            firstItem?.order_item ||
+            firstItem?.orderItem ||
+            firstItem?.product ||
+            firstItem ||
+            {};
+
           const productName = String(
+            firstItem?.productName ||
+            firstItem?.product_name ||
             orderItem.productName ||
             orderItem.product_name ||
             orderItem.name ||
             orderItem.title ||
-            firstItem?.productName ||
-            firstItem?.product_name ||
             firstItem?.name ||
             'Store Product'
           );
 
           const productSku = String(
+            firstItem?.sku ||
             orderItem.sku ||
             orderItem.barcode ||
             (orderItem.productId ? `SKU-${String(orderItem.productId).slice(0, 8).toUpperCase()}` : `SKU-${rIdx + 100}`)
           );
 
           const productImage = String(
+            firstItem?.productImage ||
+            firstItem?.image ||
             orderItem.productImage ||
             orderItem.product_image ||
             orderItem.image_url ||
             orderItem.image ||
-            firstItem?.productImage ||
-            firstItem?.image ||
             (Array.isArray(orderItem.images) && orderItem.images[0]?.image_url ? orderItem.images[0].image_url : null) ||
             'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60'
           );
 
           // Pricing parsing
           const unitPrice = Number(
-            orderItem.unitPrice ??
-            orderItem.unit_price ??
-            orderItem.price ??
             firstItem?.unitPrice ??
             firstItem?.unit_price ??
             firstItem?.price ??
+            firstItem?.storeItem?.unitPrice ??
+            firstItem?.storeItem?.unit_price ??
+            orderItem.unitPrice ??
+            orderItem.unit_price ??
+            orderItem.price ??
             0
           );
 
@@ -962,26 +1084,47 @@ export default function ReturnsPage() {
           const orderQty = Number(orderItem?.quantity ?? firstItem?.quantity ?? 1);
 
           const productTotal = Number(
+            firstItem?.totalPrice ??
+            firstItem?.total_price ??
+            firstItem?.storeItem?.totalPrice ??
+            firstItem?.storeItem?.total_price ??
             orderItem.totalPrice ??
             orderItem.total_price ??
             (unitPrice * returnQty)
           ) || (unitPrice * returnQty);
 
-          const productUnit = String(orderItem.unit || orderItem.unit_type || orderItem.weight || (orderQty > 1 ? `${orderQty} units` : '1 unit'));
+          const productUnit = String(
+            firstItem?.unit ||
+            orderItem.unit ||
+            orderItem.unit_type ||
+            orderItem.weight ||
+            (orderQty > 1 ? `${orderQty} units` : '1 unit')
+          );
+
           const productCategory = String(
             orderItem.category ||
             orderItem.category_name ||
-            (productName.toLowerCase().includes('capsicum') ? 'Vegetables & Fruits' : 'General Grocery')
+            firstItem?.category ||
+            (productName.toLowerCase().includes('potato') || productName.toLowerCase().includes('capsicum')
+              ? 'General Grocery'
+              : 'Store Category')
           );
 
           // Order financials
-          const orderSubtotal = Number(ord.subtotal ?? productTotal);
+          const orderSubtotal = Number(ord.subtotal ?? ord.sub_total ?? productTotal);
           const orderDiscountAmount = Number(ord.discountAmount ?? ord.discount_amount ?? 0);
           const orderDeliveryFee = Number(ord.deliveryFee ?? ord.delivery_fee ?? 0);
           const orderTaxAmount = Number(ord.taxAmount ?? ord.tax_amount ?? 0);
-          const orderTotalAmount = Number(ord.totalAmount ?? ord.total_amount ?? ord.total ?? productTotal);
-          const paymentMethod = String(ord.paymentMethod || ord.payment_method || 'COD').toUpperCase();
-          const paymentStatus = String(ord.paymentStatus || ord.payment_status || 'PAID').toUpperCase();
+          const orderTotalAmount = Number(
+            ord.totalAmount ??
+            ord.total_amount ??
+            ord.total ??
+            r.total_amount ??
+            r.total ??
+            orderSubtotal
+          );
+          const paymentMethod = String(ord.paymentMethod || ord.payment_method || r.payment_method || 'WALLET').toUpperCase();
+          const paymentStatus = String(ord.paymentStatus || ord.payment_status || r.payment_status || 'PAID').toUpperCase();
           const orderStatus = String(ord.status || 'DELIVERED').toUpperCase();
 
           // Status normalization
@@ -1033,13 +1176,13 @@ export default function ReturnsPage() {
             (typeof rawReason === 'string' ? `Customer stated: ${rawReason}` : 'Customer requested return for this item.');
 
           const rawEvidenceList: any[] = [
-            ...(Array.isArray(firstItem?.evidence) ? firstItem.evidence : []),
             ...(Array.isArray(firstItem?.evidence_urls) ? firstItem.evidence_urls : []),
+            ...(Array.isArray(firstItem?.evidence) ? firstItem.evidence : []),
             ...(Array.isArray(firstItem?.evidence_files) ? firstItem.evidence_files : []),
             ...(Array.isArray(firstItem?.evidences) ? firstItem.evidences : []),
             ...(Array.isArray(firstItem?.images) ? firstItem.images : []),
-            ...(Array.isArray(r.evidence) ? r.evidence : []),
             ...(Array.isArray(r.evidence_urls) ? r.evidence_urls : []),
+            ...(Array.isArray(r.evidence) ? r.evidence : []),
             ...(Array.isArray(r.evidence_files) ? r.evidence_files : []),
             ...(Array.isArray(rawReason?.images) ? rawReason.images : []),
             ...(Array.isArray(r.images) ? r.images : []),
@@ -1048,18 +1191,20 @@ export default function ReturnsPage() {
           const reasonImages: string[] = rawEvidenceList
             .map((item) => {
               if (!item) return '';
-              const filename = typeof item === 'string' ? item : item.filename || item.url || item.path || item.name || '';
+              const filename = typeof item === 'string' ? item : item.url || item.filename || item.path || item.name || '';
               if (!filename) return '';
               return getReturnEvidenceUrl(itemId, filename);
             })
             .filter(Boolean);
 
-          // Refund details
+          // Refund details: Full payable refund amount (Full order total or API refund amount)
           const payableRefund = Number(
-            firstItem?.refund_amount ||
-            r.refund_amount ||
-            productTotal ||
-            orderTotalAmount
+            r.refund?.amount ??
+            r.refund_amount ??
+            firstItem?.refund?.amount ??
+            firstItem?.refund_amount ??
+            orderTotalAmount ??
+            productTotal
           );
 
           const refundMode = paymentMethod === 'WALLET' ? 'STORE_WALLET' : paymentMethod === 'UPI' ? 'UPI' : 'ORIGINAL_PAYMENT';
@@ -1364,7 +1509,7 @@ export default function ReturnsPage() {
   const handleOpenRefund = (r: ReturnRequest) => {
     setSelectedReturn(r);
     setRefundForm({
-      refundAmount: r.product.totalPrice,
+      refundAmount: r.refund.amount || r.orderInfo?.totalAmount || r.product.totalPrice,
       deductionAmount: 0,
       deductionReason: 'None',
       refundMode: r.refund.mode || 'ORIGINAL_PAYMENT',
@@ -2164,24 +2309,14 @@ export default function ReturnsPage() {
                         </div>
                         <div className="flex items-center gap-2 overflow-x-auto py-1">
                           {item.reason.images.map((imgUrl, idx) => (
-                            <button
+                            <EvidenceImage
                               key={idx}
-                              onClick={() => setLightboxImage(imgUrl)}
-                              className="relative group shrink-0 w-16 h-16 rounded-xl overflow-hidden border border-slate-200 hover:ring-2 hover:ring-[#167a46] transition-all"
-                            >
-                              <img
-                                src={imgUrl}
-                                alt={`Proof ${idx + 1}`}
-                                onError={(e) => {
-                                  (e.currentTarget as HTMLImageElement).src =
-                                    'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
-                                }}
-                                className="w-full h-full object-cover"
-                              />
-                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                                <Maximize2 className="w-4 h-4" />
-                              </div>
-                            </button>
+                              src={imgUrl}
+                              alt={`Customer Proof ${idx + 1}`}
+                              className="w-16 h-16 rounded-xl object-cover border border-slate-200 hover:ring-2 hover:ring-[#167a46] transition-all"
+                              onClick={(effective) => setLightboxImage(effective)}
+                              showZoomIcon
+                            />
                           ))}
                         </div>
                       </div>
@@ -2220,13 +2355,32 @@ export default function ReturnsPage() {
                     {/* Financial / Refund Summary */}
                     <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-50/90 to-teal-50/60 border border-emerald-200 text-xs space-y-2 shadow-2xs">
                       <div className="flex justify-between items-center text-slate-700">
-                        <span className="font-bold text-[11px] uppercase tracking-wide text-emerald-900">Payable Refund:</span>
-                        <span className="font-black text-emerald-900 text-base">
+                        <div>
+                          <span className="font-extrabold text-[11px] uppercase tracking-wide text-emerald-950 block">
+                            Payable Refund:
+                          </span>
+                          <span className="text-[10px] text-emerald-700 font-bold">
+                            Full Amount
+                          </span>
+                        </div>
+                        <span className="font-black text-emerald-950 text-xl tracking-tight">
                           ₹{item.refund.amount}
                         </span>
                       </div>
 
                       <div className="pt-2 border-t border-emerald-200/80 space-y-1.5 text-[11px]">
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span className="text-slate-500">Item Claim Value:</span>
+                          <span className="font-bold text-slate-800">
+                            ₹{item.product.totalPrice} ({item.product.quantity} {item.product.unit})
+                          </span>
+                        </div>
+                        {item.orderInfo?.totalAmount && (
+                          <div className="flex justify-between items-center text-slate-600">
+                            <span className="text-slate-500">Order Grand Total:</span>
+                            <span className="font-bold text-slate-800">₹{item.orderInfo.totalAmount}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between items-center text-slate-600">
                           <span className="text-slate-500">Refund Destination:</span>
                           <span className="font-bold text-slate-800">
@@ -2244,12 +2398,6 @@ export default function ReturnsPage() {
                             {item.orderInfo?.paymentStatus || 'PAID'} ({item.orderInfo?.paymentMethod || 'COD'})
                           </span>
                         </div>
-                        {item.orderInfo?.totalAmount && (
-                          <div className="flex justify-between items-center text-slate-600">
-                            <span className="text-slate-500">Order Grand Total:</span>
-                            <span className="font-bold text-slate-800">₹{item.orderInfo.totalAmount}</span>
-                          </div>
-                        )}
                         {item.refund.transactionId && (
                           <div className="text-[10px] text-emerald-800 font-mono truncate pt-1 border-t border-emerald-200">
                             Txn: {item.refund.transactionId}
@@ -2479,10 +2627,10 @@ export default function ReturnsPage() {
 
       {/* MODAL 1: APPROVE REQUEST */}
       {isApproveOpen && selectedReturn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/50">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/50">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-emerald-100 text-[#167a46]">
                   <CheckCircle2 className="w-5 h-5" />
@@ -2503,7 +2651,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
               {/* Product Mini Banner */}
               <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center space-x-3.5">
                 <img
@@ -2555,16 +2703,13 @@ export default function ReturnsPage() {
                     </div>
                     <div className="flex items-center gap-2 overflow-x-auto py-1">
                       {selectedReturn.reason.images.map((img, idx) => (
-                        <img
+                        <EvidenceImage
                           key={idx}
                           src={img}
                           alt="Customer evidence"
-                          onClick={() => setLightboxImage(img)}
+                          onClick={(effective) => setLightboxImage(effective)}
                           className="w-12 h-12 rounded-xl object-cover border border-amber-300 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).src =
-                              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=300&auto=format&fit=crop&q=80';
-                          }}
+                          showZoomIcon
                         />
                       ))}
                     </div>
@@ -2648,7 +2793,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+            <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
               <button
                 onClick={() => setIsApproveOpen(false)}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
@@ -2674,10 +2819,10 @@ export default function ReturnsPage() {
 
       {/* MODAL 2: REJECT REQUEST */}
       {isRejectOpen && selectedReturn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-rose-50/60">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-rose-50/60">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
                   <XCircle className="w-5 h-5" />
@@ -2698,7 +2843,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
               <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
                 <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <span>
@@ -2727,16 +2872,13 @@ export default function ReturnsPage() {
                     </div>
                     <div className="flex items-center gap-2 overflow-x-auto py-1">
                       {selectedReturn.reason.images.map((img, idx) => (
-                        <img
+                        <EvidenceImage
                           key={idx}
                           src={img}
                           alt="Customer evidence"
-                          onClick={() => setLightboxImage(img)}
+                          onClick={(effective) => setLightboxImage(effective)}
                           className="w-12 h-12 rounded-xl object-cover border border-amber-300 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).src =
-                              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=300&auto=format&fit=crop&q=80';
-                          }}
+                          showZoomIcon
                         />
                       ))}
                     </div>
@@ -2802,7 +2944,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+            <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
               <button
                 onClick={() => setIsRejectOpen(false)}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
@@ -2828,10 +2970,10 @@ export default function ReturnsPage() {
 
       {/* MODAL 3: PROCESS REFUND */}
       {isRefundOpen && selectedReturn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/50">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/50">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-emerald-100 text-[#167a46]">
                   <DollarSign className="w-5 h-5" />
@@ -2852,7 +2994,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
               {/* Product Price Summary */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
                 <div className="flex justify-between items-center text-slate-600">
@@ -2921,7 +3063,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+            <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
               <button
                 onClick={() => setIsRefundOpen(false)}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
@@ -2942,10 +3084,10 @@ export default function ReturnsPage() {
 
       {/* MODAL 4: DISPATCH REPLACEMENT */}
       {isDispatchExchangeOpen && selectedReturn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white w-full max-w-lg max-h-[90vh] flex flex-col rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700">
                   <Truck className="w-5 h-5" />
@@ -2966,7 +3108,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 flex-1 overflow-y-auto">
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-700">Replacement Product Item</label>
                 <input
@@ -3015,7 +3157,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
+            <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
               <button
                 onClick={() => setIsDispatchExchangeOpen(false)}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
@@ -3036,10 +3178,10 @@ export default function ReturnsPage() {
 
       {/* MODAL 5: FULL DETAILS DRAWER / MODAL */}
       {isDetailOpen && selectedReturn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
           <div className="bg-white w-full max-w-2xl max-h-[90vh] rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
             {/* Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+            <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
               <div className="flex items-center space-x-3">
                 <div className="p-2.5 rounded-2xl bg-white border border-slate-200 text-[#167a46] shadow-xs">
                   <RotateCcw className="w-5 h-5" />
@@ -3175,12 +3317,13 @@ export default function ReturnsPage() {
                       <div className="text-[10px] font-bold text-slate-500 mb-1.5">Attached Photos:</div>
                       <div className="flex items-center gap-2 overflow-x-auto">
                         {selectedReturn.reason.images.map((img, idx) => (
-                          <img
+                          <EvidenceImage
                             key={idx}
                             src={img}
                             alt="Proof"
-                            onClick={() => setLightboxImage(img)}
+                            onClick={(effective) => setLightboxImage(effective)}
                             className="w-16 h-16 rounded-xl object-cover border border-amber-200 cursor-pointer hover:scale-105 transition-transform"
+                            showZoomIcon
                           />
                         ))}
                       </div>
@@ -3214,7 +3357,7 @@ export default function ReturnsPage() {
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+            <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
               <button
                 onClick={() => handlePrintSlip(selectedReturn)}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5"
@@ -3239,8 +3382,8 @@ export default function ReturnsPage() {
           onClick={() => setLightboxImage(null)}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm cursor-zoom-out animate-in fade-in duration-150"
         >
-          <div className="relative max-w-3xl max-h-[90vh]">
-            <img
+          <div className="relative max-w-3xl max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            <EvidenceImage
               src={lightboxImage}
               alt="Enlarged Proof"
               className="max-w-full max-h-[85vh] rounded-3xl object-contain shadow-2xl border border-white/20"

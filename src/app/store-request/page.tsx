@@ -31,13 +31,28 @@ import {
   LocateFixed,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
+import { useAppSelector } from '@/store';
 import { useSubmitStoreRequestMutation, useGetStoreRequestQuery } from '@/store/api/vendorApi';
 
 export default function StoreRequestPage() {
   const router = useRouter();
   const { vendor, submitStoreRegistration } = useVendorStore();
+  const { user: authUser } = useAppSelector((state) => state.auth);
   const { data: requestStatusData, refetch: refetchStoreStatus, isLoading: isFetchingStatus } = useGetStoreRequestQuery();
   const [submitStoreRequest, { isLoading: isSubmittingApi }] = useSubmitStoreRequestMutation();
+
+  // Retrieve stored user on client hydration if Redux is pending
+  const [localVendorUser, setLocalVendorUser] = useState<any>(null);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = localStorage.getItem('zippy_vendor_user');
+        if (u) setLocalVendorUser(JSON.parse(u));
+      } catch {}
+    }
+  }, []);
+
+  const activeUser = authUser || localVendorUser;
 
   const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(1);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
@@ -74,46 +89,91 @@ export default function StoreRequestPage() {
   const isApproved = currentStatus === 'APPROVED';
   const isRejected = currentStatus === 'REJECTED';
 
-  // Store Registration Form Data State (No dummy Noida values, preserves user real inputs)
+  // Store Registration Form Data State - ALL fields start blank by default except system-authenticated vendor info
   const [formData, setFormData] = useState({
-    // Step 1: Store & Owner Identity
-    storeName: requestObj?.storeName || vendor.storeName || '',
-    storeCategory: requestObj?.storeCategory || vendor.category || 'Grocery & Fresh Produce',
-    description: requestObj?.description || 'Fresh organic groceries, dairy, vegetables, and daily household items delivered in 10 minutes.',
-    ownerName: requestObj?.ownerName || vendor.ownerName || 'Rahul Sharma',
-    contactNumber: requestObj?.contactNumber || vendor.phone || '+91 98765 43210',
-    alternateNumber: requestObj?.alternateNumber || '+91 98111 22334',
-    email: requestObj?.email || vendor.email || 'vendor@zippy.com',
-    storeLogo: requestObj?.storeLogo || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
-    bannerImage: requestObj?.bannerImage || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1200&q=80',
+    // Step 1: Store & Owner Identity (Pre-populate only system-authenticated user identity)
+    storeName: requestObj?.storeName || '',
+    storeCategory: requestObj?.storeCategory || '',
+    description: requestObj?.description || '',
+    ownerName: requestObj?.ownerName || activeUser?.name || '',
+    contactNumber: requestObj?.contactNumber || activeUser?.phone || '',
+    alternateNumber: requestObj?.alternateNumber || '',
+    email: requestObj?.email || activeUser?.email || '',
+    storeLogo: requestObj?.storeLogo || '',
+    bannerImage: requestObj?.bannerImage || '',
 
-    // Step 2: Location Address
-    shopAddress: requestObj?.address?.shopAddress || vendor.address || '',
+    // Step 2: Location Address (Blank by default for user to enter)
+    shopAddress: requestObj?.address?.shopAddress || '',
     landmark: requestObj?.address?.landmark || '',
-    city: requestObj?.address?.city || vendor.city || '',
+    city: requestObj?.address?.city || '',
     state: requestObj?.address?.state || '',
-    pincode: requestObj?.address?.pincode || vendor.pincode || '',
-    latitude: requestObj?.address?.coordinates?.lat || requestObj?.address?.latitude || requestObj?.latitude || vendor.latitude || '',
-    longitude: requestObj?.address?.coordinates?.lng || requestObj?.address?.longitude || requestObj?.longitude || vendor.longitude || '',
+    pincode: requestObj?.address?.pincode || '',
+    latitude: requestObj?.address?.coordinates?.lat || requestObj?.address?.latitude || requestObj?.latitude || '',
+    longitude: requestObj?.address?.coordinates?.lng || requestObj?.address?.longitude || requestObj?.longitude || '',
 
-    // Step 3: Legal & Tax Verification
-    fssaiLicenseNumber: requestObj?.fssaiLicenseNumber || vendor.fssaiLicense || '11521034000892',
-    fssaiExpiryDate: '2028-12-31',
-    gstinNumber: requestObj?.gstinNumber || vendor.gstin || '07AAAAA0000A1Z5',
-    panNumber: 'ABCDE1234F',
-    businessType: 'Sole Proprietorship',
-    fssaiDocName: 'fssai_certificate.pdf',
-    gstDocName: 'gst_certificate.pdf',
+    // Step 3: Legal & Tax Verification (Blank by default)
+    fssaiLicenseNumber: requestObj?.fssaiLicenseNumber || requestObj?.legal?.fssaiLicenseNumber || '',
+    fssaiExpiryDate: requestObj?.fssaiExpiryDate || requestObj?.legal?.fssaiExpiryDate || '',
+    gstinNumber: requestObj?.gstinNumber || requestObj?.legal?.gstinNumber || '',
+    panNumber: requestObj?.panNumber || requestObj?.legal?.panNumber || '',
+    businessType: requestObj?.businessType || requestObj?.legal?.businessType || '',
+    fssaiDocName: requestObj?.fssaiDocName || requestObj?.legal?.fssaiDocName || '',
+    gstDocName: requestObj?.gstDocName || requestObj?.legal?.gstDocName || '',
 
-    // Step 4: Bank Settlement & Payouts
-    accountHolderName: requestObj?.bankDetails?.accountHolderName || vendor.ownerName || 'Rahul Sharma',
-    bankName: requestObj?.bankDetails?.bankName || vendor.bankName || 'HDFC Bank',
-    bankAccountNumber: requestObj?.bankDetails?.bankAccountNumber || vendor.bankAccount || '91823456789012',
-    confirmBankAccountNumber: requestObj?.bankDetails?.bankAccountNumber || vendor.bankAccount || '91823456789012',
-    ifscCode: requestObj?.bankDetails?.ifscCode || vendor.ifscCode || 'HDFC0001234',
+    // Step 4: Bank Settlement & Payouts (Blank by default except system user name)
+    accountHolderName: requestObj?.bankDetails?.accountHolderName || activeUser?.name || '',
+    bankName: requestObj?.bankDetails?.bankName || '',
+    bankAccountNumber: requestObj?.bankDetails?.bankAccountNumber || '',
+    confirmBankAccountNumber: requestObj?.bankDetails?.bankAccountNumber || '',
+    ifscCode: requestObj?.bankDetails?.ifscCode || '',
     accountType: requestObj?.bankDetails?.accountType || 'Current',
-    upiId: requestObj?.bankDetails?.upiId || 'zippystore@hdfcbank',
+    upiId: requestObj?.bankDetails?.upiId || '',
   });
+
+  // Sync state if authenticated user or backend store request data finishes loading
+  useEffect(() => {
+    if (activeUser || requestObj) {
+      setFormData((prev) => ({
+        ...prev,
+        // Only pre-populate empty fields with authenticated user account data or existing request data
+        ownerName: prev.ownerName || requestObj?.ownerName || activeUser?.name || '',
+        contactNumber: prev.contactNumber || requestObj?.contactNumber || activeUser?.phone || '',
+        email: prev.email || requestObj?.email || activeUser?.email || '',
+        accountHolderName: prev.accountHolderName || requestObj?.bankDetails?.accountHolderName || activeUser?.name || '',
+
+        // Existing store data from backend if already submitted
+        storeName: prev.storeName || requestObj?.storeName || '',
+        storeCategory: prev.storeCategory || requestObj?.storeCategory || '',
+        description: prev.description || requestObj?.description || '',
+        alternateNumber: prev.alternateNumber || requestObj?.alternateNumber || '',
+        storeLogo: prev.storeLogo || requestObj?.storeLogo || '',
+        bannerImage: prev.bannerImage || requestObj?.bannerImage || '',
+
+        shopAddress: prev.shopAddress || requestObj?.address?.shopAddress || '',
+        landmark: prev.landmark || requestObj?.address?.landmark || '',
+        city: prev.city || requestObj?.address?.city || '',
+        state: prev.state || requestObj?.address?.state || '',
+        pincode: prev.pincode || requestObj?.address?.pincode || '',
+        latitude: prev.latitude || requestObj?.address?.coordinates?.lat || requestObj?.address?.latitude || requestObj?.latitude || '',
+        longitude: prev.longitude || requestObj?.address?.coordinates?.lng || requestObj?.address?.longitude || requestObj?.longitude || '',
+
+        fssaiLicenseNumber: prev.fssaiLicenseNumber || requestObj?.fssaiLicenseNumber || requestObj?.legal?.fssaiLicenseNumber || '',
+        fssaiExpiryDate: prev.fssaiExpiryDate || requestObj?.fssaiExpiryDate || requestObj?.legal?.fssaiExpiryDate || '',
+        gstinNumber: prev.gstinNumber || requestObj?.gstinNumber || requestObj?.legal?.gstinNumber || '',
+        panNumber: prev.panNumber || requestObj?.panNumber || requestObj?.legal?.panNumber || '',
+        businessType: prev.businessType || requestObj?.businessType || requestObj?.legal?.businessType || '',
+        fssaiDocName: prev.fssaiDocName || requestObj?.fssaiDocName || requestObj?.legal?.fssaiDocName || '',
+        gstDocName: prev.gstDocName || requestObj?.gstDocName || requestObj?.legal?.gstDocName || '',
+
+        bankName: prev.bankName || requestObj?.bankDetails?.bankName || '',
+        bankAccountNumber: prev.bankAccountNumber || requestObj?.bankDetails?.bankAccountNumber || '',
+        confirmBankAccountNumber: prev.confirmBankAccountNumber || requestObj?.bankDetails?.bankAccountNumber || '',
+        ifscCode: prev.ifscCode || requestObj?.bankDetails?.ifscCode || '',
+        accountType: prev.accountType || requestObj?.bankDetails?.accountType || 'Current',
+        upiId: prev.upiId || requestObj?.bankDetails?.upiId || '',
+      }));
+    }
+  }, [activeUser, requestObj]);
 
   // Search locality / place with Nominatim autocomplete
   const handleSearchAddressInput = async (val: string) => {
@@ -338,10 +398,86 @@ export default function StoreRequestPage() {
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    if (name === 'contactNumber' || name === 'alternateNumber') {
+      let digits = value.replace(/\D/g, '');
+      if (digits.startsWith('91') && digits.length > 10) digits = digits.slice(2);
+      else if (digits.startsWith('0') && digits.length > 10) digits = digits.slice(1);
+      setFormData((prev) => ({ ...prev, [name]: digits.slice(0, 10) }));
+      return;
+    }
+    if (name === 'panNumber' || name === 'ifscCode' || name === 'gstinNumber') {
+      setFormData((prev) => ({ ...prev, [name]: value.toUpperCase().trim() }));
+      return;
+    }
+    if (name === 'pincode') {
+      const cleanVal = value.replace(/[^0-9]/g, '').slice(0, 6);
+      setFormData((prev) => ({ ...prev, pincode: cleanVal }));
+      return;
+    }
+    if (name === 'fssaiLicenseNumber' || name === 'bankAccountNumber' || name === 'confirmBankAccountNumber') {
+      const cleanVal = value.replace(/[^0-9]/g, '');
+      setFormData((prev) => ({ ...prev, [name]: cleanVal }));
+      return;
+    }
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleNextStep = () => {
+    setErrorMessage('');
+    if (activeStep === 1) {
+      if (!formData.storeName.trim()) {
+        setErrorMessage('Please enter your Store / Business Name.');
+        return;
+      }
+      if (!formData.storeCategory) {
+        setErrorMessage('Please select a Primary Store Category.');
+        return;
+      }
+      if (!formData.ownerName.trim()) {
+        setErrorMessage('Please enter Store Owner Full Name.');
+        return;
+      }
+      if (!formData.contactNumber.trim() || formData.contactNumber.length < 10) {
+        setErrorMessage('Please enter a valid 10-digit Primary Contact Number.');
+        return;
+      }
+      if (!formData.email.trim()) {
+        setErrorMessage('Please enter Vendor Email Address.');
+        return;
+      }
+    } else if (activeStep === 2) {
+      if (!formData.shopAddress.trim()) {
+        setErrorMessage('Please enter your Shop Building & Street Address.');
+        return;
+      }
+      if (!formData.city.trim()) {
+        setErrorMessage('Please enter your City.');
+        return;
+      }
+      if (!formData.pincode.trim() || formData.pincode.length !== 6 || formData.pincode.startsWith('0')) {
+        setErrorMessage('Please enter a valid 6-digit Indian Postal Pincode (e.g. 110029).');
+        return;
+      }
+    } else if (activeStep === 3) {
+      if (!formData.fssaiLicenseNumber.trim()) {
+        setErrorMessage('Please enter your FSSAI License Number (14 digits).');
+        return;
+      }
+      if (!formData.gstinNumber.trim()) {
+        setErrorMessage('Please enter your GSTIN Registration Number.');
+        return;
+      }
+      if (!formData.panNumber.trim()) {
+        setErrorMessage('Please enter your Business PAN Card Number.');
+        return;
+      }
+      if (!formData.businessType) {
+        setErrorMessage('Please select Business Ownership Entity Type.');
+        return;
+      }
+    }
+
     if (activeStep < 4) {
       setActiveStep((prev) => (prev + 1) as any);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -349,6 +485,7 @@ export default function StoreRequestPage() {
   };
 
   const handlePrevStep = () => {
+    setErrorMessage('');
     if (activeStep > 1) {
       setActiveStep((prev) => (prev - 1) as any);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -359,46 +496,67 @@ export default function StoreRequestPage() {
     e.preventDefault();
     setErrorMessage('');
 
+    if (!formData.accountHolderName.trim()) {
+      setErrorMessage('Please enter Account Holder Name.');
+      return;
+    }
+    if (!formData.bankName.trim()) {
+      setErrorMessage('Please enter Bank Name.');
+      return;
+    }
+    if (!formData.bankAccountNumber.trim() || formData.bankAccountNumber.length < 8) {
+      setErrorMessage('Please enter a valid Bank Account Number (at least 8 digits).');
+      return;
+    }
+    if (formData.bankAccountNumber !== formData.confirmBankAccountNumber) {
+      setErrorMessage('Bank Account Number and Confirm Account Number do not match.');
+      return;
+    }
+    if (!formData.ifscCode.trim() || formData.ifscCode.length < 11) {
+      setErrorMessage('Please enter a valid 11-character Bank IFSC Code.');
+      return;
+    }
+
     try {
       const latNum = formData.latitude ? parseFloat(formData.latitude) : 28.5708;
       const lngNum = formData.longitude ? parseFloat(formData.longitude) : 77.3261;
 
       // Submit via RTK Query POST /api/v1/vendor/store-request matching exact backend schema
       const storeRequestPayload = {
-        storeName: formData.storeName,
+        storeName: formData.storeName.trim(),
         storeCategory: formData.storeCategory,
-        description: formData.description,
-        ownerName: formData.ownerName,
-        contactNumber: formData.contactNumber,
-        alternateNumber: formData.alternateNumber || formData.contactNumber,
-        email: formData.email,
-        storeLogo: formData.storeLogo || 'https://example.com/logo.jpg',
-        bannerImage: formData.bannerImage || 'https://example.com/banner.jpg',
+        description: formData.description.trim(),
+        ownerName: formData.ownerName.trim(),
+        contactNumber: formData.contactNumber.trim(),
+        alternateNumber: formData.alternateNumber.trim() || formData.contactNumber.trim(),
+        email: formData.email.trim(),
+        storeLogo: formData.storeLogo.trim() || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+        bannerImage: formData.bannerImage.trim() || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=1200&q=80',
         address: {
-          shopAddress: formData.shopAddress,
-          landmark: formData.landmark,
-          city: formData.city,
-          state: formData.state || 'Delhi',
-          pincode: formData.pincode,
+          shopAddress: formData.shopAddress.trim(),
+          landmark: formData.landmark.trim(),
+          city: formData.city.trim(),
+          state: formData.state.trim() || 'Delhi',
+          pincode: formData.pincode.trim(),
           coordinates: {
             lat: Number(latNum),
             lng: Number(lngNum),
           },
         },
         legal: {
-          fssaiLicenseNumber: formData.fssaiLicenseNumber,
-          fssaiExpiryDate: formData.fssaiExpiryDate,
-          gstinNumber: formData.gstinNumber,
-          panNumber: formData.panNumber,
-          businessType: formData.businessType,
+          fssaiLicenseNumber: formData.fssaiLicenseNumber.trim(),
+          fssaiExpiryDate: formData.fssaiExpiryDate || '2028-12-31',
+          gstinNumber: formData.gstinNumber.trim(),
+          panNumber: formData.panNumber.trim(),
+          businessType: formData.businessType || 'Sole Proprietorship',
         },
         bankDetails: {
-          accountHolderName: formData.accountHolderName,
-          bankName: formData.bankName,
-          bankAccountNumber: formData.bankAccountNumber,
-          ifscCode: formData.ifscCode,
-          accountType: formData.accountType,
-          upiId: formData.upiId,
+          accountHolderName: formData.accountHolderName.trim() || formData.ownerName.trim(),
+          bankName: formData.bankName.trim(),
+          bankAccountNumber: formData.bankAccountNumber.trim(),
+          ifscCode: formData.ifscCode.trim(),
+          accountType: formData.accountType || 'Current',
+          upiId: formData.upiId.trim() || undefined,
         },
       };
 
@@ -560,7 +718,7 @@ export default function StoreRequestPage() {
                 {[
                   requestObj?.address?.city || requestObj?.city || vendor.city,
                   requestObj?.address?.pincode || requestObj?.pincode || vendor.pincode
-                ].filter(Boolean).join(' - ') || 'Noida, UP'}
+                ].filter(Boolean).join(' - ') || 'Store Location'}
               </p>
             </div>
 
@@ -833,10 +991,12 @@ export default function StoreRequestPage() {
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Primary Store Category *</label>
                         <select
                           name="storeCategory"
+                          required
                           value={formData.storeCategory}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm bg-white text-slate-900"
                         >
+                          <option value="">Select Store Category *</option>
                           <option value="Grocery & Fresh Produce">Grocery & Fresh Produce</option>
                           <option value="Dairy, Bread & Eggs">Dairy, Bread & Eggs</option>
                           <option value="Fruits & Vegetables">Fruits & Vegetables</option>
@@ -869,7 +1029,7 @@ export default function StoreRequestPage() {
                             type="text"
                             name="ownerName"
                             required
-                            placeholder="Rahul Sharma"
+                            placeholder="Enter owner full name"
                             value={formData.ownerName}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm"
@@ -879,16 +1039,30 @@ export default function StoreRequestPage() {
 
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Primary Contact Number *</label>
-                        <div className="relative">
-                          <Phone className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <div className="relative flex items-center">
+                          <div className="absolute left-3.5 flex items-center gap-1.5 pointer-events-none text-slate-500 font-bold text-xs">
+                            <Phone className="w-3.5 h-3.5 text-slate-400" />
+                            <span>+91</span>
+                          </div>
                           <input
                             type="tel"
                             name="contactNumber"
                             required
-                            placeholder="+91 98765 43210"
+                            maxLength={10}
+                            onKeyDown={(e) => {
+                              if (
+                                !/[0-9]/.test(e.key) &&
+                                !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(e.key) &&
+                                !e.ctrlKey &&
+                                !e.metaKey
+                              ) {
+                                e.preventDefault();
+                              }
+                            }}
+                            placeholder="10-digit mobile number"
                             value={formData.contactNumber}
                             onChange={handleChange}
-                            className="custom-input w-full pl-10 pr-4 py-2.5 text-sm"
+                            className="custom-input w-full pl-16 pr-4 py-2.5 text-sm font-mono tracking-wider"
                           />
                         </div>
                       </div>
@@ -913,15 +1087,29 @@ export default function StoreRequestPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Alternate Contact Number</label>
-                        <div className="relative">
-                          <Phone className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <div className="relative flex items-center">
+                          <div className="absolute left-3.5 flex items-center gap-1.5 pointer-events-none text-slate-500 font-bold text-xs">
+                            <Phone className="w-3.5 h-3.5 text-slate-400" />
+                            <span>+91</span>
+                          </div>
                           <input
                             type="tel"
                             name="alternateNumber"
-                            placeholder="+91 98111 22334"
+                            maxLength={10}
+                            onKeyDown={(e) => {
+                              if (
+                                !/[0-9]/.test(e.key) &&
+                                !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(e.key) &&
+                                !e.ctrlKey &&
+                                !e.metaKey
+                              ) {
+                                e.preventDefault();
+                              }
+                            }}
+                            placeholder="10-digit number (Optional)"
                             value={formData.alternateNumber}
                             onChange={handleChange}
-                            className="custom-input w-full pl-10 pr-4 py-2.5 text-sm"
+                            className="custom-input w-full pl-16 pr-4 py-2.5 text-sm font-mono tracking-wider"
                           />
                         </div>
                       </div>
@@ -931,7 +1119,7 @@ export default function StoreRequestPage() {
                         <input
                           type="url"
                           name="storeLogo"
-                          placeholder="https://example.com/logo.jpg"
+                          placeholder="https://example.com/logo.jpg (Optional)"
                           value={formData.storeLogo}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm"
@@ -943,7 +1131,7 @@ export default function StoreRequestPage() {
                         <input
                           type="url"
                           name="bannerImage"
-                          placeholder="https://example.com/banner.jpg"
+                          placeholder="https://example.com/banner.jpg (Optional)"
                           value={formData.bannerImage}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm"
@@ -1108,7 +1296,7 @@ export default function StoreRequestPage() {
                           type="text"
                           name="landmark"
                           required
-                          placeholder="e.g. Near Green Park Metro Station"
+                          placeholder="e.g. Near Metro Station / Main Market"
                           value={formData.landmark}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm"
@@ -1129,16 +1317,61 @@ export default function StoreRequestPage() {
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">Pincode *</label>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700">Pincode *</label>
+                          <span className="text-[11px] text-slate-400 font-medium">6 digits</span>
+                        </div>
                         <input
                           type="text"
+                          inputMode="numeric"
                           name="pincode"
                           required
+                          maxLength={6}
+                          onKeyDown={(e) => {
+                            if (
+                              !/[0-9]/.test(e.key) &&
+                              !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(e.key) &&
+                              !e.ctrlKey &&
+                              !e.metaKey
+                            ) {
+                              e.preventDefault();
+                            }
+                            const input = e.currentTarget;
+                            const isTextSelected = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0) > 0;
+                            if (/[0-9]/.test(e.key) && input.value.length >= 6 && !isTextSelected) {
+                              e.preventDefault();
+                            }
+                          }}
                           placeholder="e.g. 110029"
                           value={formData.pincode}
                           onChange={handleChange}
-                          className="custom-input w-full px-4 py-2.5 text-sm font-mono"
+                          className={`custom-input w-full px-4 py-2.5 text-sm font-mono tracking-widest ${
+                            formData.pincode && (formData.pincode.length < 6 || formData.pincode.startsWith('0'))
+                              ? 'border-rose-300 focus:border-rose-500 bg-rose-50/20'
+                              : formData.pincode.length === 6
+                              ? 'border-emerald-300 focus:border-emerald-500'
+                              : ''
+                          }`}
                         />
+                        {/* Pincode Inline Validation Messages */}
+                        {formData.pincode && formData.pincode.length > 0 && formData.pincode.length < 6 && (
+                          <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                            <span>Pincode must be exactly 6 numeric digits ({formData.pincode.length}/6 entered)</span>
+                          </p>
+                        )}
+                        {formData.pincode && formData.pincode.length === 6 && formData.pincode.startsWith('0') && (
+                          <p className="text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                            <span>Invalid Pincode: Postal code cannot start with 0</span>
+                          </p>
+                        )}
+                        {formData.pincode && formData.pincode.length === 6 && !formData.pincode.startsWith('0') && (
+                          <p className="text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-1">
+                            <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                            <span>Valid 6-digit Pincode</span>
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -1225,7 +1458,7 @@ export default function StoreRequestPage() {
                             name="fssaiLicenseNumber"
                             required
                             maxLength={14}
-                            placeholder="11521034000892"
+                            placeholder="Enter 14-digit FSSAI Number"
                             value={formData.fssaiLicenseNumber}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm font-mono"
@@ -1259,7 +1492,8 @@ export default function StoreRequestPage() {
                             type="text"
                             name="gstinNumber"
                             required
-                            placeholder="07AAAAA0000A1Z5"
+                            maxLength={15}
+                            placeholder="Enter 15-character GSTIN"
                             value={formData.gstinNumber}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm uppercase font-mono"
@@ -1273,7 +1507,8 @@ export default function StoreRequestPage() {
                           type="text"
                           name="panNumber"
                           required
-                          placeholder="ABCDE1234F"
+                          maxLength={10}
+                          placeholder="Enter 10-character PAN"
                           value={formData.panNumber}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm uppercase font-mono"
@@ -1282,13 +1517,15 @@ export default function StoreRequestPage() {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Business Ownership Entity Type</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Business Ownership Entity Type *</label>
                       <select
                         name="businessType"
+                        required
                         value={formData.businessType}
                         onChange={handleChange}
                         className="custom-input w-full px-4 py-2.5 text-sm bg-white"
                       >
+                        <option value="">Select Business Entity Type *</option>
                         <option value="Sole Proprietorship">Sole Proprietorship</option>
                         <option value="Partnership Firm">Partnership Firm</option>
                         <option value="Private Limited Company">Private Limited Company (Pvt Ltd)</option>
@@ -1302,22 +1539,38 @@ export default function StoreRequestPage() {
                         <Upload className="w-6 h-6 text-[#167a46] shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold text-slate-800">FSSAI Certificate PDF</p>
-                          <p className="text-[11px] text-emerald-700 font-medium truncate">{formData.fssaiDocName}</p>
+                          <p className="text-[11px] text-slate-500 font-medium truncate">
+                            {formData.fssaiDocName ? formData.fssaiDocName : 'No file attached (Optional / On verification)'}
+                          </p>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
-                          Attached
-                        </span>
+                        {formData.fssaiDocName ? (
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
+                            Attached
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded-md">
+                            Optional
+                          </span>
+                        )}
                       </div>
 
                       <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300 flex items-center space-x-3">
                         <Upload className="w-6 h-6 text-[#167a46] shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold text-slate-800">GST Registration PDF</p>
-                          <p className="text-[11px] text-emerald-700 font-medium truncate">{formData.gstDocName}</p>
+                          <p className="text-[11px] text-slate-500 font-medium truncate">
+                            {formData.gstDocName ? formData.gstDocName : 'No file attached (Optional / On verification)'}
+                          </p>
                         </div>
-                        <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
-                          Attached
-                        </span>
+                        {formData.gstDocName ? (
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
+                            Attached
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded-md">
+                            Optional
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1333,7 +1586,7 @@ export default function StoreRequestPage() {
                           type="text"
                           name="accountHolderName"
                           required
-                          placeholder="Rahul Sharma"
+                          placeholder="Enter account holder name"
                           value={formData.accountHolderName}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm"
@@ -1346,7 +1599,7 @@ export default function StoreRequestPage() {
                           type="text"
                           name="bankName"
                           required
-                          placeholder="HDFC Bank"
+                          placeholder="e.g. State Bank of India, HDFC Bank, etc."
                           value={formData.bankName}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm"
@@ -1363,7 +1616,7 @@ export default function StoreRequestPage() {
                             type="text"
                             name="bankAccountNumber"
                             required
-                            placeholder="91823456789012"
+                            placeholder="Enter bank account number"
                             value={formData.bankAccountNumber}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm font-mono"
@@ -1379,7 +1632,7 @@ export default function StoreRequestPage() {
                             type="text"
                             name="confirmBankAccountNumber"
                             required
-                            placeholder="91823456789012"
+                            placeholder="Re-enter bank account number"
                             value={formData.confirmBankAccountNumber}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm font-mono"
@@ -1397,7 +1650,8 @@ export default function StoreRequestPage() {
                             type="text"
                             name="ifscCode"
                             required
-                            placeholder="HDFC0001234"
+                            maxLength={11}
+                            placeholder="e.g. SBIN0001234"
                             value={formData.ifscCode}
                             onChange={handleChange}
                             className="custom-input w-full pl-10 pr-4 py-2.5 text-sm uppercase font-mono"
@@ -1423,7 +1677,7 @@ export default function StoreRequestPage() {
                         <input
                           type="text"
                           name="upiId"
-                          placeholder="zippystore@hdfcbank"
+                          placeholder="e.g. username@okhdfcbank (Optional)"
                           value={formData.upiId}
                           onChange={handleChange}
                           className="custom-input w-full px-4 py-2.5 text-sm font-mono"

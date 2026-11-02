@@ -17,6 +17,9 @@ export interface VendorProfile {
   bankName: string;
   bankAccount: string;
   ifscCode: string;
+  accountHolderName?: string;
+  accountType?: string;
+  upiId?: string;
   bannerImage: string;
   operatingHours: string;
   approvalStatus: StoreApprovalStatus;
@@ -141,6 +144,9 @@ export const useVendorStore = create<VendorStore>((set, get) => ({
     bankName: '',
     bankAccount: '',
     ifscCode: '',
+    accountHolderName: '',
+    accountType: 'Current',
+    upiId: '',
     bannerImage: '',
     operatingHours: '06:00 AM - 11:00 PM',
     approvalStatus: 'NOT_REGISTERED',

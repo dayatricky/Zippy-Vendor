@@ -25,6 +25,7 @@ import {
   useGetOrderDetailsQuery,
   useUpdateOrderStatusMutation,
 } from '@/store/api/vendorApi';
+import { resolveImageUrl } from '@/utils/imageUrl';
 
 export default function OrdersPage() {
   const { orders: localOrders, updateOrderStatus: localUpdateOrderStatus } = useVendorStore();
@@ -151,7 +152,7 @@ export default function OrdersPage() {
                   productName: typeof it.product_name === 'string' ? it.product_name : typeof it.product?.name === 'string' ? it.product.name : typeof it.name === 'string' ? it.name : 'Product Item',
                   quantity: Number(it.quantity || 1),
                   price: Number(it.unit_price ?? it.price ?? it.total_price ?? 0),
-                  image: itemImg,
+                  image: resolveImageUrl(itemImg),
                 };
               })
             : [],
@@ -386,9 +387,12 @@ export default function OrdersPage() {
                       >
                         <div className="flex items-center space-x-2.5">
                           <img
-                            src={item.image}
+                            src={resolveImageUrl(item.image)}
                             alt={item.productName}
                             className="w-9 h-9 rounded-lg object-cover border border-slate-200 bg-white"
+                            onError={(e: any) => {
+                              e.target.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
+                            }}
                           />
                           <span className="font-semibold text-slate-800 line-clamp-1">{item.productName}</span>
                         </div>

@@ -45,6 +45,7 @@ import {
   useGetWithdrawalHistoryQuery,
   useRequestWithdrawalMutation,
   useGetStoreRequestQuery,
+  useGetBankDetailsQuery,
 } from '@/store/api/vendorApi';
 
 export type SettlementStatus = 'UNSETTLED' | 'IN_REVIEW' | 'SETTLED';
@@ -446,17 +447,53 @@ export default function WithdrawalsPage() {
     return `${y}-${m}-${day}`;
   };
 
-  // Store request query to get linked bank details
+  // Store request query & dedicated bank details query to get linked bank details
   const { data: storeRequestData } = useGetStoreRequestQuery(undefined);
+  const { data: bankDetailsData } = useGetBankDetailsQuery(undefined);
   const storeReq = (storeRequestData as any)?.data || storeRequestData;
+  const rawBank = (bankDetailsData as any)?.data || (bankDetailsData as any)?.bankDetails || bankDetailsData;
+
   const bankInfo = useMemo(() => ({
-    accountHolderName: storeReq?.bankDetails?.accountHolderName || vendor.ownerName || vendor.storeName || '',
-    bankName: storeReq?.bankDetails?.bankName || vendor.bankName || '',
-    accountNumber: storeReq?.bankDetails?.bankAccountNumber || vendor.bankAccount || '',
-    ifscCode: storeReq?.bankDetails?.ifscCode || vendor.ifscCode || '',
-    accountType: storeReq?.bankDetails?.accountType || 'Bank Account',
-    upiId: storeReq?.bankDetails?.upiId || (vendor as any)?.upiId || '',
-  }), [storeReq, vendor]);
+    accountHolderName:
+      rawBank?.accountHolderName ||
+      rawBank?.account_holder_name ||
+      storeReq?.bankDetails?.accountHolderName ||
+      vendor.accountHolderName ||
+      vendor.ownerName ||
+      vendor.storeName ||
+      '',
+    bankName:
+      rawBank?.bankName ||
+      rawBank?.bank_name ||
+      storeReq?.bankDetails?.bankName ||
+      vendor.bankName ||
+      '',
+    accountNumber:
+      rawBank?.bankAccountNumber ||
+      rawBank?.bank_account_number ||
+      rawBank?.account_number ||
+      storeReq?.bankDetails?.bankAccountNumber ||
+      vendor.bankAccount ||
+      '',
+    ifscCode:
+      rawBank?.ifscCode ||
+      rawBank?.ifsc_code ||
+      storeReq?.bankDetails?.ifscCode ||
+      vendor.ifscCode ||
+      '',
+    accountType:
+      rawBank?.accountType ||
+      rawBank?.account_type ||
+      storeReq?.bankDetails?.accountType ||
+      vendor.accountType ||
+      'Bank Account',
+    upiId:
+      rawBank?.upiId ||
+      rawBank?.upi_id ||
+      storeReq?.bankDetails?.upiId ||
+      (vendor as any)?.upiId ||
+      '',
+  }), [rawBank, storeReq, vendor]);
 
   // ==========================================
   // 3 SWAGGER APIS FOR WITHDRAWALS:

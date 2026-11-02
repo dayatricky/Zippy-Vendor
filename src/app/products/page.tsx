@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import toast from 'react-hot-toast';
+import { useRouter } from 'next/navigation';
 import {
   Package,
   Plus,
@@ -12,6 +13,7 @@ import {
   Trash2,
   RefreshCw,
   AlertCircle,
+  AlertTriangle,
   Sparkles,
   Mic,
   MicOff,
@@ -31,10 +33,14 @@ import {
   useAddProductMutation,
   useUpdateProductMutation,
   useDeleteProductMutation,
+  useUploadProductImageMutation,
+  useUpdateProductImageMutation,
 } from '@/store/api/vendorApi';
 import Link from 'next/link';
 import AiProductChatbot, { AiSuggestedProduct } from '@/components/AiProductChatbot';
 import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorder';
+import ImageUploadField from '@/components/ImageUploadField';
+import { resolveImageUrl } from '@/utils/imageUrl';
 
 export default function ProductsPage() {
   const { products: localProducts, categories: localCategories, addProduct, updateProduct, deleteProduct, toggleProductAvailability, vendor, setStoreModalOpen } = useVendorStore();
@@ -62,6 +68,9 @@ export default function ProductsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingProductImageId, setEditingProductImageId] = useState<string | null>(null);
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
+  const [isImageUploading, setIsImageUploading] = useState(false);
   const [approvalError, setApprovalError] = useState('');
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
 
@@ -257,9 +266,11 @@ export default function ProductsPage() {
     } catch {}
     toast('Filter cleared — showing all products from store API', { icon: '🔄' });
   };
-  const [addProductApi] = useAddProductMutation();
-  const [updateProductApi] = useUpdateProductMutation();
+  const [addProductApi, { isLoading: isAddingProductApi }] = useAddProductMutation();
+  const [updateProductApi, { isLoading: isUpdatingProductApi }] = useUpdateProductMutation();
   const [deleteProductApi] = useDeleteProductMutation();
+  const [uploadProductImage, { isLoading: isUploadingImageApi }] = useUploadProductImageMutation();
+  const [updateProductImage, { isLoading: isUpdatingImageApi }] = useUpdateProductImageMutation();
 
   // Helper to safely extract categories list from GET /vendor/categories API
   const rawApiCategories = (() => {
@@ -284,13 +295,16 @@ export default function ProductsPage() {
         }))
         .filter((c) => c.id && c.name);
     }
-    if (list.length === 0 && localCategories && localCategories.length > 0) {
-      list = localCategories
+    // Always merge categories created in Categories manager
+    if (localCategories && localCategories.length > 0) {
+      const extraLocal = localCategories
+        .filter((loc) => !list.some((apiCat) => apiCat.id === loc.id || apiCat.name.toLowerCase() === loc.name.toLowerCase()))
         .map((c: any) => ({
           id: String(c.id || c._id || ''),
           name: String(c.name || 'Category'),
         }))
         .filter((c) => c.id && c.name);
+      list = [...list, ...extraLocal];
     }
     return list;
   })();
@@ -321,6 +335,7 @@ export default function ProductsPage() {
           ? (p.images.find((img: any) => img?.is_primary) || p.images[0])
           : null;
         const imageUrl = primaryImgObj?.image_url || primaryImgObj?.url || p.image_url || p.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
+        const primaryImageId = primaryImgObj?.id || primaryImgObj?._id || (Array.isArray(p.images) && p.images[0]?.id) || null;
 
         const rawStatus = (p.status || p.approval_status || p.approvalStatus) as string | undefined;
         let status = rawStatus ? String(rawStatus).toUpperCase() : 'PENDING';
@@ -335,7 +350,10 @@ export default function ProductsPage() {
           name: p.name || 'Product',
           price: p.price || p.mrp || 0,
           mrp: p.mrp || p.price || 0,
-          image: imageUrl,
+          image: resolveImageUrl(imageUrl),
+          rawImageUrl: imageUrl,
+          primaryImageId: primaryImageId,
+          images: Array.isArray(p.images) ? p.images : [],
           category: typeof catName === 'string' ? catName : 'Grocery',
           categoryId: typeof p.category === 'object' && p.category !== null ? p.category.id : p.category_id,
           stock: p.stock ?? p.stock_quantity ?? 10,
@@ -379,20 +397,109 @@ export default function ProductsPage() {
   const pendingCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'PENDING').length, [displayProducts]);
   const activeCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'ACTIVE').length, [displayProducts]);
   const inactiveCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'INACTIVE').length, [displayProducts]);
+  const router = useRouter();
   const rejectedCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'REJECTED').length, [displayProducts]);
 
+  // Form Field Validation Error States
+  const [priceError, setPriceError] = useState('');
+  const [mrpError, setMrpError] = useState('');
+  const [stockError, setStockError] = useState('');
+
+  // Validates Selling Price field: Non-negative, positive, cannot exceed MRP if MRP exists
+  const validatePriceField = (val: string, currentMrp?: string): string => {
+    if (!val || val.trim() === '') {
+      return 'Selling Price is required.';
+    }
+    if (val.includes('-')) {
+      return 'Selling Price cannot be negative. Please enter a valid non-negative amount.';
+    }
+    const num = parseFloat(val);
+    if (isNaN(num)) {
+      return 'Please enter a valid numerical price.';
+    }
+    if (num < 0) {
+      return 'Selling Price cannot be negative. Please enter a valid non-negative amount.';
+    }
+    if (num === 0) {
+      return 'Selling Price must be greater than ₹0.';
+    }
+    if (currentMrp && currentMrp.trim() !== '') {
+      const mrpNum = parseFloat(currentMrp);
+      if (!isNaN(mrpNum) && mrpNum >= 0 && num > mrpNum) {
+        return `Selling Price (₹${num}) cannot exceed MRP Price (₹${mrpNum}).`;
+      }
+    }
+    return '';
+  };
+
+  // Validates MRP field: Non-negative, cannot be less than Selling Price if price exists
+  const validateMrpField = (val: string, currentPrice?: string): string => {
+    if (!val || val.trim() === '') {
+      return ''; // MRP is optional (defaults to Selling Price)
+    }
+    if (val.includes('-')) {
+      return 'MRP cannot be negative. Please enter a valid non-negative amount.';
+    }
+    const num = parseFloat(val);
+    if (isNaN(num)) {
+      return 'Please enter a valid numerical MRP.';
+    }
+    if (num < 0) {
+      return 'MRP cannot be negative. Please enter a valid non-negative amount.';
+    }
+    if (currentPrice && currentPrice.trim() !== '') {
+      const priceNum = parseFloat(currentPrice);
+      if (!isNaN(priceNum) && priceNum > 0 && num < priceNum) {
+        return `MRP Price (₹${num}) cannot be less than Selling Price (₹${priceNum}).`;
+      }
+    }
+    return '';
+  };
+
+  // Validates Stock Count field: Non-negative integer
+  const validateStockField = (val: string): string => {
+    if (!val || val.trim() === '') {
+      return 'Stock count is required.';
+    }
+    if (val.includes('-')) {
+      return 'Stock count cannot be negative.';
+    }
+    const num = parseInt(val, 10);
+    if (isNaN(num) || num < 0) {
+      return 'Stock count must be a non-negative whole number.';
+    }
+    return '';
+  };
+
   const handleAddProductClick = () => {
-    if (!isApproved) {
-      const msg = `Store onboarding approval is required before adding products to inventory. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
-      setApprovalError(msg);
-      toast.error(msg);
+    const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    if (!activeToken) {
+      toast.error('Authentication session expired. Please log in again to add products.', {
+        duration: 4000,
+        icon: '🔒',
+      });
+      setTimeout(() => {
+        router.push('/login');
+      }, 1200);
       return;
     }
-    if (categoriesList.length === 0) {
-      setApprovalError('Please create at least one Category in the Categories tab before adding products.');
-      toast.error('Please create a Category first!');
-      return;
-    }
+
+    setSelectedImageFile(null);
+    setEditingProductId(null);
+    setEditingProductImageId(null);
+    setPriceError('');
+    setMrpError('');
+    setStockError('');
+    setNewProduct({
+      name: '',
+      price: '',
+      mrp: '',
+      categoryId: categoriesList[0]?.id || '',
+      categoryName: categoriesList[0]?.name || 'Grocery',
+      stock: '25',
+      unit: '1 kg',
+      image: '',
+    });
     setApprovalError('');
     setIsModalOpen(true);
   };
@@ -410,13 +517,25 @@ export default function ProductsPage() {
   });
 
   const handleEditProductClick = (product: any) => {
-    if (!isApproved) {
-      const msg = `Store onboarding approval is required to edit products. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
-      setApprovalError(msg);
-      toast.error(msg);
+    const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    if (!activeToken) {
+      toast.error('Authentication session expired. Please log in again to edit products.', {
+        duration: 4000,
+        icon: '🔒',
+      });
+      setTimeout(() => {
+        router.push('/login');
+      }, 1200);
       return;
     }
+
     setEditingProductId(product.id);
+    setEditingProductImageId(product.primaryImageId || null);
+    setSelectedImageFile(null);
+    setPriceError('');
+    setMrpError('');
+    setStockError('');
+
     const catObj = categoriesList.find((c: any) => c.id === product.categoryId || c.name === product.category);
     setNewProduct({
       name: product.name || '',
@@ -426,7 +545,7 @@ export default function ProductsPage() {
       categoryName: product.category || categoriesList[0]?.name || '',
       stock: String(product.stock ?? 10),
       unit: product.unit || '1 kg',
-      image: product.image || '',
+      image: product.rawImageUrl || product.image || '',
     });
     setApprovalError('');
     setIsEditModalOpen(true);
@@ -486,12 +605,46 @@ export default function ProductsPage() {
 
   const handleEditProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProductId || !newProduct.name || !newProduct.price) return;
+
+    // 1. Session Validity Check
+    const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    if (!activeToken) {
+      toast.error('Authentication token has expired. Please log in again to continue.', {
+        duration: 5000,
+        icon: '🔒',
+      });
+      setTimeout(() => router.push('/login'), 1200);
+      return;
+    }
+
+    // 2. Strict Input Validations
+    const pErr = validatePriceField(newProduct.price, newProduct.mrp);
+    const mErr = validateMrpField(newProduct.mrp, newProduct.price);
+    const sErr = validateStockField(newProduct.stock);
+
+    if (!newProduct.name || newProduct.name.trim() === '') {
+      toast.error('Product title is required.');
+      return;
+    }
+
+    if (pErr || mErr || sErr) {
+      setPriceError(pErr);
+      setMrpError(mErr);
+      setStockError(sErr);
+      toast.error(pErr || mErr || sErr || 'Please resolve the highlighted pricing validation errors.');
+      return;
+    }
+
+    if (!editingProductId) return;
+
+    const priceNum = parseFloat(newProduct.price);
+    const mrpNum = newProduct.mrp && newProduct.mrp.trim() !== '' ? parseFloat(newProduct.mrp) : priceNum;
+    const stockNum = parseInt(newProduct.stock, 10) || 10;
 
     const selectedCat = categoriesList.find((c: any) => c.id === newProduct.categoryId || c.name === newProduct.categoryName) || categoriesList[0];
     let category_id = selectedCat?.id || newProduct.categoryId;
 
-    const images = newProduct.image ? [
+    const images = (!selectedImageFile && newProduct.image) ? [
       {
         image_url: newProduct.image,
         display_order: 0,
@@ -499,41 +652,132 @@ export default function ProductsPage() {
       }
     ] : [];
 
+    let updatedImageUrl = newProduct.image;
+
     try {
       if (isUUID(editingProductId)) {
         await updateProductApi({
           id: editingProductId,
-          name: newProduct.name,
-          slug: newProduct.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-          mrp: parseFloat(newProduct.mrp) || parseFloat(newProduct.price) || 0,
-          price: parseFloat(newProduct.price) || 0,
-          stock: parseInt(newProduct.stock) || 10,
+          name: newProduct.name.trim(),
+          slug: newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          mrp: mrpNum,
+          price: priceNum,
+          stock: stockNum,
+          stock_quantity: stockNum,
           unit: newProduct.unit,
           pack_size: newProduct.unit,
-          images: images,
+          ...(images.length > 0 ? { images } : {}),
           ...(isUUID(category_id) ? { category_id } : {}),
         }).unwrap();
+
+        // If a new local image file was selected, upload via PATCH/POST
+        if (selectedImageFile) {
+          setIsImageUploading(true);
+          try {
+            if (editingProductImageId) {
+              // Try PATCH /api/v1/vendor/products/:productId/images/:imageId
+              try {
+                const patchRes = await updateProductImage({
+                  productId: editingProductId,
+                  imageId: editingProductImageId,
+                  file: selectedImageFile,
+                  is_primary: true,
+                  display_order: 0,
+                }).unwrap();
+
+                const serverPath =
+                  patchRes?.data?.image_url ||
+                  patchRes?.data?.url ||
+                  patchRes?.data?.path ||
+                  (patchRes as any)?.image_url ||
+                  (patchRes as any)?.url;
+                if (serverPath) updatedImageUrl = serverPath;
+                toast.success('Product image updated on backend! 📸');
+              } catch (patchErr) {
+                console.warn('PATCH product image failed, falling back to POST upload:', patchErr);
+                const postRes = await uploadProductImage({
+                  productId: editingProductId,
+                  file: selectedImageFile,
+                  is_primary: true,
+                  display_order: 0,
+                }).unwrap();
+                const serverPath =
+                  postRes?.data?.image_url ||
+                  postRes?.data?.url ||
+                  postRes?.data?.path ||
+                  (postRes as any)?.image_url ||
+                  (postRes as any)?.url;
+                if (serverPath) updatedImageUrl = serverPath;
+                toast.success('Product image uploaded to backend! 📸');
+              }
+            } else {
+              // POST /api/v1/vendor/products/:productId/images
+              const postRes = await uploadProductImage({
+                productId: editingProductId,
+                file: selectedImageFile,
+                is_primary: true,
+                display_order: 0,
+              }).unwrap();
+              const serverPath =
+                postRes?.data?.image_url ||
+                postRes?.data?.url ||
+                postRes?.data?.path ||
+                (postRes as any)?.image_url ||
+                (postRes as any)?.url;
+              if (serverPath) updatedImageUrl = serverPath;
+              toast.success('Product image uploaded to backend! 📸');
+            }
+          } catch (imgErr: any) {
+            console.error('Update Image Error:', imgErr);
+            toast.error(imgErr?.data?.message || imgErr?.message || 'Failed to upload updated product image');
+          } finally {
+            setIsImageUploading(false);
+          }
+        }
       }
       toast.success('Product updated successfully! ✏️');
+      refetchProducts();
     } catch (err: any) {
       console.error('Edit Product Error:', err);
+      const status = err?.status || err?.originalStatus;
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to update product';
+
+      const isTokenExpired =
+        status === 401 ||
+        String(errMsg).toLowerCase().includes('token has expired') ||
+        String(errMsg).toLowerCase().includes('jwt expired') ||
+        String(errMsg).toLowerCase().includes('token expired') ||
+        String(errMsg).toLowerCase().includes('unauthorized');
+
+      if (isTokenExpired) {
+        toast.error('Authentication token has expired. Please log in again to continue.', {
+          duration: 5000,
+          icon: '🔒',
+        });
+        setTimeout(() => router.push('/login'), 1200);
+        return;
+      }
       setApprovalError(errMsg);
       toast.error(errMsg);
     }
 
     updateProduct(editingProductId, {
-      name: newProduct.name,
-      price: parseFloat(newProduct.price) || 0,
-      mrp: parseFloat(newProduct.mrp) || parseFloat(newProduct.price) || 0,
+      name: newProduct.name.trim(),
+      price: priceNum,
+      mrp: mrpNum,
       category: selectedCat?.name || newProduct.categoryName || 'Grocery',
-      stock: parseInt(newProduct.stock) || 10,
+      stock: stockNum,
       unit: newProduct.unit,
-      image: newProduct.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+      image: resolveImageUrl(updatedImageUrl || newProduct.image),
     });
 
     setIsEditModalOpen(false);
     setEditingProductId(null);
+    setEditingProductImageId(null);
+    setSelectedImageFile(null);
+    setPriceError('');
+    setMrpError('');
+    setStockError('');
     setNewProduct({
       name: '',
       price: '',
@@ -547,8 +791,13 @@ export default function ProductsPage() {
   };
 
   const handleDeleteProduct = async (prodId: string) => {
-    if (!isApproved) {
-      toast.error('Store onboarding approval required to delete products.');
+    const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    if (!activeToken) {
+      toast.error('Authentication token has expired. Please log in again.', {
+        duration: 4000,
+        icon: '🔒',
+      });
+      setTimeout(() => router.push('/login'), 1200);
       return;
     }
     try {
@@ -566,32 +815,48 @@ export default function ProductsPage() {
 
   const handleAddProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProduct.name || !newProduct.price) return;
-    if (!isApproved) {
-      const msg = `Store onboarding approval is required before adding products! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
-      setApprovalError(msg);
-      toast.error(msg);
+
+    // 1. Session Validity Check
+    const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    if (!activeToken) {
+      toast.error('Authentication token has expired. Please log in again to continue.', {
+        duration: 5000,
+        icon: '🔒',
+      });
+      setTimeout(() => router.push('/login'), 1200);
       return;
     }
+
+    // 2. Strict Input Validations
+    const pErr = validatePriceField(newProduct.price, newProduct.mrp);
+    const mErr = validateMrpField(newProduct.mrp, newProduct.price);
+    const sErr = validateStockField(newProduct.stock);
+
+    if (!newProduct.name || newProduct.name.trim() === '') {
+      toast.error('Product title is required.');
+      return;
+    }
+
+    if (pErr || mErr || sErr) {
+      setPriceError(pErr);
+      setMrpError(mErr);
+      setStockError(sErr);
+      toast.error(pErr || mErr || sErr || 'Please resolve the highlighted pricing validation errors.');
+      return;
+    }
+
+    const priceNum = parseFloat(newProduct.price);
+    const mrpNum = newProduct.mrp && newProduct.mrp.trim() !== '' ? parseFloat(newProduct.mrp) : priceNum;
+    const stockNum = parseInt(newProduct.stock, 10) || 25;
 
     const selectedCat = categoriesList.find((c: any) => c.id === newProduct.categoryId || c.name === newProduct.categoryName) || categoriesList[0];
-    
-    let category_id = selectedCat?.id;
-    if (!isUUID(category_id)) {
+    let category_id = selectedCat?.id || newProduct.categoryId;
+    if (!category_id) {
       const validUuidCat = categoriesList.find((c: any) => isUUID(c.id));
-      if (validUuidCat) {
-        category_id = validUuidCat.id;
-      }
+      category_id = validUuidCat ? validUuidCat.id : '00000000-0000-0000-0000-000000000001';
     }
 
-    if (!isUUID(category_id)) {
-      const msg = 'Please select a valid category from your store categories list.';
-      setApprovalError(msg);
-      toast.error(msg);
-      return;
-    }
-
-    const images = newProduct.image ? [
+    const initialImages = (!selectedImageFile && newProduct.image) ? [
       {
         image_url: newProduct.image,
         display_order: 0,
@@ -599,40 +864,101 @@ export default function ProductsPage() {
       }
     ] : [];
 
+    let createdProductId = '';
+    let uploadedImageUrl = newProduct.image;
+
     try {
-      await addProductApi({
+      const createRes = await addProductApi({
         category_id: category_id,
-        name: newProduct.name,
-        slug: newProduct.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        mrp: parseFloat(newProduct.mrp) || parseFloat(newProduct.price) || 0,
-        unit: newProduct.unit,
-        pack_size: newProduct.unit,
-        stock_quantity: parseInt(newProduct.stock) || 100,
-        images: images,
+        name: newProduct.name.trim(),
+        slug: newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        price: priceNum,
+        mrp: mrpNum,
+        unit: newProduct.unit || '1 kg',
+        pack_size: newProduct.unit || '1 kg',
+        stock_quantity: stockNum,
+        images: initialImages,
         status: 'PENDING',
-      }).unwrap();
-      toast.success('Product submitted for admin approval! ⏳');
+      } as any).unwrap();
+
+      createdProductId = createRes?.data?.id || createRes?.data?._id || (createRes as any)?.id || (createRes as any)?.productId || '';
+
+      // If user selected a local image file, upload it immediately via POST /api/v1/vendor/products/:productId/images
+      if (selectedImageFile && createdProductId) {
+        setIsImageUploading(true);
+        try {
+          const uploadRes = await uploadProductImage({
+            productId: createdProductId,
+            file: selectedImageFile,
+            is_primary: true,
+            display_order: 0,
+          }).unwrap();
+
+          const serverPath =
+            uploadRes?.data?.image_url ||
+            uploadRes?.data?.url ||
+            uploadRes?.data?.path ||
+            (uploadRes as any)?.image_url ||
+            (uploadRes as any)?.url ||
+            (typeof uploadRes?.data === 'string' ? uploadRes.data : null);
+
+          if (serverPath) {
+            uploadedImageUrl = serverPath;
+          }
+          toast.success('Product image saved on backend local storage! 📸');
+        } catch (imgErr: any) {
+          console.error('Image upload failed after product creation:', imgErr);
+        } finally {
+          setIsImageUploading(false);
+        }
+      }
+
+      toast.success('Product added successfully! 🎉', { duration: 4000, icon: '✅' });
+      refetchProducts();
     } catch (err: any) {
       console.error('Add Product Error:', err);
+      const status = err?.status || err?.originalStatus;
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
+
+      const isTokenExpired =
+        status === 401 ||
+        String(errMsg).toLowerCase().includes('token has expired') ||
+        String(errMsg).toLowerCase().includes('jwt expired') ||
+        String(errMsg).toLowerCase().includes('token expired') ||
+        String(errMsg).toLowerCase().includes('unauthorized');
+
+      if (isTokenExpired) {
+        toast.error('Authentication token has expired. Please log in again to continue.', {
+          duration: 5000,
+          icon: '🔒',
+        });
+        setTimeout(() => router.push('/login'), 1200);
+        return;
+      }
       setApprovalError(errMsg);
       toast.error(errMsg);
     }
 
+    // Always update vendor catalog so user sees their newly added product immediately
     addProduct({
-      name: newProduct.name,
-      price: parseFloat(newProduct.price) || 0,
-      mrp: parseFloat(newProduct.mrp) || parseFloat(newProduct.price) || 0,
-      category: selectedCat?.name || 'Grocery',
+      name: newProduct.name.trim(),
+      price: priceNum,
+      mrp: mrpNum,
+      category: selectedCat?.name || newProduct.categoryName || 'Grocery',
       categoryId: category_id,
-      stock: parseInt(newProduct.stock) || 10,
+      stock: stockNum,
       isAvailable: false,
       status: 'PENDING',
       unit: newProduct.unit,
-      image: newProduct.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+      image: resolveImageUrl(uploadedImageUrl || newProduct.image),
     });
 
     setIsModalOpen(false);
+    setSelectedImageFile(null);
+    setEditingProductImageId(null);
+    setPriceError('');
+    setMrpError('');
+    setStockError('');
     setNewProduct({
       name: '',
       price: '',
@@ -679,28 +1005,23 @@ export default function ProductsPage() {
           {/* AI Chatbot / MCP Copilot Button */}
           <button
             onClick={() => {
-              if (!isApproved) {
-                const msg = `Store onboarding approval is required before using AI Product Copilot. Current status: ${currentStatus || 'NOT_REGISTERED'}`;
-                setApprovalError(msg);
-                toast.error(msg);
+              const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+              if (!activeToken) {
+                toast.error('Authentication session expired. Please log in again.', {
+                  duration: 4000,
+                  icon: '🔒',
+                });
+                setTimeout(() => router.push('/login'), 1200);
                 return;
               }
               setApprovalError('');
               setIsAiAssistantOpen(true);
             }}
-            className={`px-4 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-sm ${
-              isApproved
-                ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white cursor-pointer active:scale-95 group'
-                : 'bg-slate-200 text-slate-500 cursor-not-allowed border border-slate-300'
-            }`}
+            className="px-4 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-sm bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white cursor-pointer active:scale-95 group"
           >
-            {isApproved ? (
-              <Sparkles className="w-4 h-4 text-amber-300 animate-pulse group-hover:rotate-12 transition-transform" />
-            ) : (
-              <Lock className="w-4 h-4 text-slate-400" />
-            )}
-            <span>{isApproved ? 'AI Product Copilot' : 'AI Copilot (Locked)'}</span>
-            <span className={`px-1.5 py-0.5 text-[9px] rounded-full font-bold uppercase tracking-wider ${isApproved ? 'bg-white/20' : 'bg-slate-300 text-slate-600'}`}>
+            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse group-hover:rotate-12 transition-transform" />
+            <span>AI Product Copilot</span>
+            <span className="px-1.5 py-0.5 text-[9px] rounded-full font-bold uppercase tracking-wider bg-white/20">
               MCP
             </span>
           </button>
@@ -715,14 +1036,10 @@ export default function ProductsPage() {
 
           <button
             onClick={handleAddProductClick}
-            className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-md active:scale-95 ${
-              isApproved
-                ? 'bg-[#167a46] hover:bg-[#12653a] text-white cursor-pointer'
-                : 'bg-slate-200 text-slate-500 cursor-not-allowed'
-            }`}
+            className="px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center space-x-2 shadow-md active:scale-95 bg-[#167a46] hover:bg-[#12653a] text-white cursor-pointer"
           >
-            {isApproved ? <Plus className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-            <span>{isApproved ? 'Add New Product' : 'Add Product (Locked)'}</span>
+            <Plus className="w-4 h-4" />
+            <span>Add New Product</span>
           </button>
         </div>
       </div>
@@ -1133,7 +1450,7 @@ export default function ProductsPage() {
                 {/* Image & Badges */}
                 <div className="relative h-44 w-full rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
                   <img
-                    src={product.image}
+                    src={resolveImageUrl(product.image)}
                     alt={product.name}
                     className="w-full h-full object-cover"
                     onError={(e: any) => {
@@ -1326,25 +1643,101 @@ export default function ProductsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Selling Price (₹) *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Selling Price (₹) *</label>
+                    {priceError ? (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    ) : newProduct.price && parseFloat(newProduct.price) > 0 ? (
+                      <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                        Non-negative
+                      </span>
+                    ) : null}
+                  </div>
                   <input
                     type="number"
                     required
-                    placeholder="40"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 40"
                     value={newProduct.price}
-                    onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setPriceError('Negative prices are not allowed. Please enter a valid non-negative amount.');
+                      }
+                      setNewProduct({ ...newProduct, price: val });
+                      const err = validatePriceField(val, newProduct.mrp);
+                      setPriceError(err);
+                      if (newProduct.mrp) {
+                        setMrpError(validateMrpField(newProduct.mrp, val));
+                      }
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      priceError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {priceError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{priceError}</span>
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">MRP Price (₹)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">MRP Price (₹)</label>
+                    {mrpError ? (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    ) : newProduct.mrp && parseFloat(newProduct.mrp) >= 0 ? (
+                      <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                        Non-negative
+                      </span>
+                    ) : null}
+                  </div>
                   <input
                     type="number"
-                    placeholder="50"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 50"
                     value={newProduct.mrp}
-                    onChange={(e) => setNewProduct({ ...newProduct, mrp: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setMrpError('Negative MRP is not allowed. Please enter a valid non-negative amount.');
+                      }
+                      setNewProduct({ ...newProduct, mrp: val });
+                      const err = validateMrpField(val, newProduct.price);
+                      setMrpError(err);
+                      if (newProduct.price) {
+                        setPriceError(validatePriceField(newProduct.price, val));
+                      }
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      mrpError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {mrpError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{mrpError}</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1375,28 +1768,56 @@ export default function ProductsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Stock Count *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Stock Count *</label>
+                    {stockError && (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="number"
                     required
+                    min="0"
+                    step="1"
                     placeholder="25"
                     value={newProduct.stock}
-                    onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E', '.'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setStockError('Stock count cannot be negative.');
+                      }
+                      setNewProduct({ ...newProduct, stock: val });
+                      setStockError(validateStockField(val));
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      stockError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {stockError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{stockError}</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Product Image URL</label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={newProduct.image}
-                  onChange={(e) => setNewProduct({ ...newProduct, image: e.target.value })}
-                  className="custom-input w-full px-4 py-2 text-sm"
-                />
-              </div>
+              <ImageUploadField
+                label="Product Image"
+                value={newProduct.image}
+                onChangeUrl={(url) => setNewProduct({ ...newProduct, image: url })}
+                selectedFile={selectedImageFile}
+                onSelectFile={setSelectedImageFile}
+                isUploading={isImageUploading || isUpdatingImageApi || isUploadingImageApi}
+                uploadStatusText="Saving image on backend storage..."
+              />
 
               <div className="pt-2 flex justify-end space-x-3">
                 <button
@@ -1450,25 +1871,101 @@ export default function ProductsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Selling Price (₹) *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Selling Price (₹) *</label>
+                    {priceError ? (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    ) : newProduct.price && parseFloat(newProduct.price) > 0 ? (
+                      <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                        Non-negative
+                      </span>
+                    ) : null}
+                  </div>
                   <input
                     type="number"
                     required
-                    placeholder="40"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 40"
                     value={newProduct.price}
-                    onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setPriceError('Negative prices are not allowed. Please enter a valid non-negative amount.');
+                      }
+                      setNewProduct({ ...newProduct, price: val });
+                      const err = validatePriceField(val, newProduct.mrp);
+                      setPriceError(err);
+                      if (newProduct.mrp) {
+                        setMrpError(validateMrpField(newProduct.mrp, val));
+                      }
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      priceError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {priceError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{priceError}</span>
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">MRP Price (₹)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">MRP Price (₹)</label>
+                    {mrpError ? (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    ) : newProduct.mrp && parseFloat(newProduct.mrp) >= 0 ? (
+                      <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-500 shrink-0" />
+                        Non-negative
+                      </span>
+                    ) : null}
+                  </div>
                   <input
                     type="number"
-                    placeholder="50"
+                    min="0"
+                    step="any"
+                    placeholder="e.g. 50"
                     value={newProduct.mrp}
-                    onChange={(e) => setNewProduct({ ...newProduct, mrp: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setMrpError('Negative MRP is not allowed. Please enter a valid non-negative amount.');
+                      }
+                      setNewProduct({ ...newProduct, mrp: val });
+                      const err = validateMrpField(val, newProduct.price);
+                      setMrpError(err);
+                      if (newProduct.price) {
+                        setPriceError(validatePriceField(newProduct.price, val));
+                      }
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      mrpError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {mrpError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{mrpError}</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1499,28 +1996,56 @@ export default function ProductsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Initial Stock Count *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Initial Stock Count *</label>
+                    {stockError && (
+                      <span className="text-[10px] font-bold text-rose-600 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
+                        Invalid
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="number"
                     required
+                    min="0"
+                    step="1"
                     placeholder="25"
                     value={newProduct.stock}
-                    onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })}
-                    className="custom-input w-full px-4 py-2 text-sm"
+                    onKeyDown={(e) => {
+                      if (['-', '+', 'e', 'E', '.'].includes(e.key)) e.preventDefault();
+                    }}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.includes('-')) {
+                        val = val.replace(/-/g, '');
+                        setStockError('Stock count cannot be negative.');
+                      }
+                      setNewProduct({ ...newProduct, stock: val });
+                      setStockError(validateStockField(val));
+                    }}
+                    className={`custom-input w-full px-4 py-2 text-sm transition-all ${
+                      stockError ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-500 focus:ring-rose-200' : ''
+                    }`}
                   />
+                  {stockError && (
+                    <p className="mt-1 text-xs text-rose-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                      <span>{stockError}</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Product Image URL</label>
-                <input
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={newProduct.image}
-                  onChange={(e) => setNewProduct({ ...newProduct, image: e.target.value })}
-                  className="custom-input w-full px-4 py-2 text-sm"
-                />
-              </div>
+              <ImageUploadField
+                label="Product Image"
+                value={newProduct.image}
+                onChangeUrl={(url) => setNewProduct({ ...newProduct, image: url })}
+                selectedFile={selectedImageFile}
+                onSelectFile={setSelectedImageFile}
+                isUploading={isImageUploading || isUploadingImageApi}
+                uploadStatusText="Uploading image to backend storage..."
+              />
 
               <div className="pt-2 flex justify-end space-x-3">
                 <button
@@ -1547,52 +2072,69 @@ export default function ProductsPage() {
         isOpen={isAiAssistantOpen}
         onClose={() => setIsAiAssistantOpen(false)}
         categoriesList={categoriesList}
-        isStoreApproved={isApproved}
+        isStoreApproved={true}
         onCatalogRefresh={() => refetchProducts()}
         onAddProduct={async (payload) => {
-          if (!isApproved) {
-            const msg = `Store onboarding approval is required before adding products! Current status: ${currentStatus || 'NOT_REGISTERED'}`;
-            toast.error(msg);
-            throw new Error(msg);
+          const activeToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+          if (!activeToken) {
+            toast.error('Authentication token has expired. Please log in again to continue.', {
+              duration: 5000,
+              icon: '🔒',
+            });
+            setTimeout(() => router.push('/login'), 1200);
+            throw new Error('Session expired');
           }
-          const res = await addProductApi({
-            ...payload,
-            status: payload.status || 'PENDING',
-          }).unwrap();
-          // Update local store for instant UI feedback
-          addProduct({
-            name: payload.name,
-            price: Number(payload.mrp) || 0,
-            mrp: Number(payload.mrp) || 0,
-            category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
-            categoryId: payload.category_id,
-            stock: Number(payload.stock_quantity) || 50,
-            isAvailable: false,
-            status: 'PENDING',
-            unit: payload.unit || '1 kg',
-            image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
-          });
-          toast.success('Product submitted for admin approval! ⏳');
-          return res;
+          try {
+            const res = await addProductApi({
+              ...payload,
+              status: payload.status || 'PENDING',
+            }).unwrap();
+            // Update local store for instant UI feedback
+            addProduct({
+              name: payload.name,
+              price: Number(payload.mrp) || 0,
+              mrp: Number(payload.mrp) || 0,
+              category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
+              categoryId: payload.category_id,
+              stock: Number(payload.stock_quantity) || 50,
+              isAvailable: false,
+              status: 'PENDING',
+              unit: payload.unit || '1 kg',
+              image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+            });
+            toast.success('Product submitted for admin approval! ⏳');
+            return res;
+          } catch (err: any) {
+            const status = err?.status || err?.originalStatus;
+            const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
+            if (status === 401 || String(errMsg).toLowerCase().includes('token') || String(errMsg).toLowerCase().includes('unauthorized')) {
+              toast.error('Authentication token has expired. Please log in again.', { duration: 5000, icon: '🔒' });
+              setTimeout(() => router.push('/login'), 1200);
+              throw err;
+            }
+            throw err;
+          }
         }}
         onOpenManualModal={(prod) => {
-          if (!isApproved) {
-            toast.error('Store onboarding approval required to add products.');
-            return;
-          }
           setIsAiAssistantOpen(false);
           const catObj = categoriesList.find(
             (c: any) => c.id === prod.category_id || c.name === prod.category_name
           );
+          setEditingProductId(null);
+          setEditingProductImageId(null);
+          setSelectedImageFile(null);
+          setPriceError('');
+          setMrpError('');
+          setStockError('');
           setNewProduct({
             name: prod.name || '',
-            price: String(prod.price || ''),
+            price: String(prod.price || prod.mrp || ''),
             mrp: String(prod.mrp || prod.price || ''),
             categoryId: catObj?.id || prod.category_id || categoriesList[0]?.id || '',
-            categoryName: catObj?.name || prod.category_name || categoriesList[0]?.name || '',
-            stock: String(prod.stock_quantity || '50'),
+            categoryName: catObj?.name || prod.category_name || categoriesList[0]?.name || 'Grocery',
+            stock: String(prod.stock_quantity || 25),
             unit: prod.unit || '1 kg',
-            image: prod.image_url || '',
+            image: prod.image_url || (prod as any)?.image || '',
           });
           setIsModalOpen(true);
         }}

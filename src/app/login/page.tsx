@@ -23,11 +23,16 @@ export default function LoginPage() {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const recaptchaRef = useRef<ReCaptchaRef>(null);
 
-  // If user is already authenticated, redirect away from /login to /
+  // Check for expired session notification or redirect if already authenticated
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      const storedMsg = sessionStorage.getItem('zippy_auth_message');
+      if (storedMsg) {
+        setErrorMessage(storedMsg);
+        sessionStorage.removeItem('zippy_auth_message');
+      }
       const token = localStorage.getItem('zippy_vendor_token');
-      if (token) {
+      if (token && !storedMsg) {
         router.replace('/');
       }
     }

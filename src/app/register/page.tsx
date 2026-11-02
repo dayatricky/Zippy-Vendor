@@ -49,14 +49,80 @@ export default function RegisterPage() {
     return () => clearInterval(interval);
   }, [step, resendTimer]);
 
+  // Strict phone input handler - only digits, max 10
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let digits = e.target.value.replace(/\D/g, '');
+    // If pasted or typed with leading 91 (e.g. 919876543210) or 0 (09876543210), strip it
+    if (digits.startsWith('91') && digits.length > 10) {
+      digits = digits.slice(2);
+    } else if (digits.startsWith('0') && digits.length > 10) {
+      digits = digits.slice(1);
+    }
+    setFormData((prev) => ({ ...prev, phoneNumber: digits.slice(0, 10) }));
+  };
+
+  const handlePhoneKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Allow control/navigation keys
+    if (
+      ['Backspace', 'Delete', 'Tab', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(
+        e.key
+      )
+    ) {
+      return;
+    }
+    // Allow copy, paste, select all, cut (Ctrl/Cmd + C, V, A, X)
+    if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
+      return;
+    }
+    // Prevent any non-digit character from being typed
+    if (!/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+    }
+  };
+
+  const handlePhonePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text') || '';
+    let digits = pasted.replace(/\D/g, '');
+    if (digits.startsWith('91') && digits.length > 10) {
+      digits = digits.slice(2);
+    } else if (digits.startsWith('0') && digits.length > 10) {
+      digits = digits.slice(1);
+    }
+    setFormData((prev) => ({ ...prev, phoneNumber: digits.slice(0, 10) }));
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    if (name === 'phoneNumber') {
+      handlePhoneChange(e);
+      return;
+    }
+    setFormData({ ...formData, [name]: value });
   };
 
   // Step 1: Submit Signup & Trigger POST /api/v1/vendor/auth/signup
   const handleSignupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.email || !formData.fullName) return;
+    if (!formData.email || !formData.fullName) {
+      setErrorMessage('Please fill in all required fields.');
+      return;
+    }
+
+    // Strict Phone Number Validation - Only 10 digits allowed
+    const cleanPhone = formData.phoneNumber.replace(/\D/g, '');
+    if (!cleanPhone) {
+      setErrorMessage('Please enter your 10-digit mobile phone number.');
+      return;
+    }
+    if (cleanPhone.length !== 10) {
+      setErrorMessage('Mobile number must be exactly 10 digits (e.g. 9876543210).');
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      setErrorMessage('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+      return;
+    }
 
     if (!captchaToken) {
       setErrorMessage('Please check the "I\'m not a robot" reCAPTCHA box to continue.');
@@ -86,17 +152,17 @@ export default function RegisterPage() {
 
       await dispatch(
         signupVendorThunk({
-          fullName: formData.fullName,
-          email: formData.email,
-          phoneNumber: formData.phoneNumber,
+          fullName: formData.fullName.trim(),
+          email: formData.email.trim().toLowerCase(),
+          phoneNumber: cleanPhone,
           password: formData.password,
         })
       ).unwrap();
 
-      registerUserAccount(formData.fullName, formData.email, formData.phoneNumber);
+      registerUserAccount(formData.fullName.trim(), formData.email.trim().toLowerCase(), cleanPhone);
       setStep('VERIFY_OTP');
       setResendTimer(30);
-      setStatusMessage(`OTP sent to ${formData.email}!`);
+      setStatusMessage(`OTP sent to ${formData.email.trim().toLowerCase()}!`);
     } catch (err: any) {
       const msg = typeof err === 'string' ? err : err?.message || 'Signup failed. Please try again.';
       setErrorMessage(msg);
@@ -279,19 +345,43 @@ export default function RegisterPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Mobile Phone *</label>
-                  <div className="relative">
-                    <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Mobile Phone *</label>
+                    <span className="text-[10px] font-bold">
+                      {formData.phoneNumber.length === 10 ? (
+                        <span className="text-emerald-700 font-bold flex items-center gap-0.5">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600 inline" /> 10 Digits Valid
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">{formData.phoneNumber.length}/10 digits</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="relative flex items-center">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none text-slate-400">
+                      <Phone className="w-4 h-4 text-slate-400" />
+                      <span className="text-xs font-bold text-slate-600 select-none pl-1 border-r border-slate-200 pr-2">
+                        +91
+                      </span>
+                    </div>
                     <input
                       type="tel"
                       name="phoneNumber"
                       required
-                      placeholder="+91 98765 43210"
+                      inputMode="numeric"
+                      autoComplete="tel-national"
+                      maxLength={10}
+                      placeholder="9876543210"
                       value={formData.phoneNumber}
-                      onChange={handleChange}
-                      className="custom-input w-full pl-9 pr-3 py-2 text-xs"
+                      onChange={handlePhoneChange}
+                      onKeyDown={handlePhoneKeyDown}
+                      onPaste={handlePhonePaste}
+                      className="custom-input w-full pl-20 pr-3 py-2 text-xs font-semibold tracking-wider"
                     />
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Enter 10-digit Indian mobile number without country code
+                  </p>
                 </div>
 
                 <div>

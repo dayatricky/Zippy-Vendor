@@ -29,19 +29,19 @@ export default function StoreRegistrationModal() {
 
   const [formData, setFormData] = useState({
     storeName: vendor.storeName || '',
-    category: 'Grocery & Fresh Produce',
-    address: '',
-    city: 'Noida',
-    pincode: '201301',
+    category: vendor.category || '',
+    address: vendor.address || '',
+    city: vendor.city || '',
+    pincode: vendor.pincode || '',
     latitude: vendor.latitude || '',
     longitude: vendor.longitude || '',
-    operatingHours: '06:00 AM - 11:00 PM',
-    fssaiLicense: '',
-    gstin: '',
-    bankName: 'HDFC Bank',
-    bankAccount: '',
-    ifscCode: '',
-    bannerImage: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&q=80',
+    operatingHours: vendor.operatingHours || '06:00 AM - 11:00 PM',
+    fssaiLicense: vendor.fssaiLicense || '',
+    gstin: vendor.gstin || '',
+    bankName: vendor.bankName || '',
+    bankAccount: vendor.bankAccount || '',
+    ifscCode: vendor.ifscCode || '',
+    bannerImage: vendor.bannerImage || '',
   });
 
   const detectLocation = () => {
@@ -69,7 +69,13 @@ export default function StoreRegistrationModal() {
   if (!isStoreModalOpen) return null;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    if (name === 'pincode') {
+      const cleanVal = value.replace(/[^0-9]/g, '').slice(0, 6);
+      setFormData((prev) => ({ ...prev, pincode: cleanVal }));
+      return;
+    }
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -177,10 +183,12 @@ export default function StoreRegistrationModal() {
                   <label className="block text-xs font-bold text-slate-700 mb-1">Store Category *</label>
                   <select
                     name="category"
+                    required
                     value={formData.category}
                     onChange={handleChange}
                     className="custom-input w-full px-4 py-2.5 text-sm bg-white text-slate-800"
                   >
+                    <option value="">Select Store Category *</option>
                     <option value="Grocery & Fresh Produce">Grocery & Fresh Produce</option>
                     <option value="Dairy, Bread & Eggs">Dairy, Bread & Eggs</option>
                     <option value="Fruits & Vegetables">Fruits & Vegetables</option>
@@ -209,7 +217,7 @@ export default function StoreRegistrationModal() {
                     type="text"
                     name="city"
                     required
-                    placeholder="Noida"
+                    placeholder="e.g. New Delhi"
                     value={formData.city}
                     onChange={handleChange}
                     className="custom-input w-full px-4 py-2.5 text-sm"
@@ -217,16 +225,46 @@ export default function StoreRegistrationModal() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Pincode *</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">Pincode *</label>
+                    <span className="text-[10px] text-slate-400">6 digits</span>
+                  </div>
                   <input
                     type="text"
+                    inputMode="numeric"
                     name="pincode"
                     required
-                    placeholder="201301"
+                    maxLength={6}
+                    onKeyDown={(e) => {
+                      if (
+                        !/[0-9]/.test(e.key) &&
+                        !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter'].includes(e.key) &&
+                        !e.ctrlKey &&
+                        !e.metaKey
+                      ) {
+                        e.preventDefault();
+                      }
+                      const input = e.currentTarget;
+                      const isTextSelected = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0) > 0;
+                      if (/[0-9]/.test(e.key) && input.value.length >= 6 && !isTextSelected) {
+                        e.preventDefault();
+                      }
+                    }}
+                    placeholder="e.g. 110029"
                     value={formData.pincode}
                     onChange={handleChange}
-                    className="custom-input w-full px-4 py-2.5 text-sm"
+                    className="custom-input w-full px-4 py-2.5 text-sm font-mono tracking-widest"
                   />
+                  {formData.pincode && formData.pincode.length > 0 && formData.pincode.length < 6 && (
+                    <p className="text-[10px] text-rose-600 font-semibold mt-1">
+                      Pincode must be exactly 6 digits ({formData.pincode.length}/6)
+                    </p>
+                  )}
+                  {formData.pincode && formData.pincode.length === 6 && formData.pincode.startsWith('0') && (
+                    <p className="text-[10px] text-rose-600 font-semibold mt-1">
+                      Invalid Pincode: Cannot start with 0
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -343,7 +381,7 @@ export default function StoreRegistrationModal() {
                     type="text"
                     name="bankName"
                     required
-                    placeholder="HDFC Bank"
+                    placeholder="e.g. State Bank of India, HDFC Bank, etc."
                     value={formData.bankName}
                     onChange={handleChange}
                     className="custom-input w-full px-4 py-2.5 text-sm"
@@ -358,7 +396,7 @@ export default function StoreRegistrationModal() {
                       type="text"
                       name="bankAccount"
                       required
-                      placeholder="91823456789012"
+                      placeholder="Enter bank account number"
                       value={formData.bankAccount}
                       onChange={handleChange}
                       className="custom-input w-full pl-10 pr-4 py-2.5 text-sm font-mono"
@@ -375,7 +413,8 @@ export default function StoreRegistrationModal() {
                     type="text"
                     name="ifscCode"
                     required
-                    placeholder="HDFC0001234"
+                    maxLength={11}
+                    placeholder="e.g. SBIN0001234"
                     value={formData.ifscCode}
                     onChange={handleChange}
                     className="custom-input w-full pl-10 pr-4 py-2.5 text-sm uppercase font-mono"

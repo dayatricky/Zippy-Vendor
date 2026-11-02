@@ -101,6 +101,8 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
 
+
+
   useEffect(() => {
     dispatch(initializeAuth());
     if (typeof window !== 'undefined') {
@@ -439,11 +441,6 @@ export default function VendorLayout({ children }: VendorLayoutProps) {
 
           {/* Right Header Actions */}
           <div className="flex items-center space-x-3">
-            <button className="p-2 rounded-xl bg-slate-100 border border-slate-200 text-slate-600 hover:text-[#167a46] relative">
-              <Bell className="w-4 h-4" />
-              <span className="w-2 h-2 rounded-full bg-[#167a46] absolute top-1.5 right-1.5" />
-            </button>
-
             <Link
               href="/settings"
               className="flex items-center space-x-2.5 pl-3 pr-2 py-1.5 rounded-xl bg-slate-100 border border-slate-200 hover:border-[#167a46] transition-all"

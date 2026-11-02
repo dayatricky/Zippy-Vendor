@@ -29,6 +29,7 @@ import {
 import toast from 'react-hot-toast';
 import { useGetCategoriesQuery } from '@/store/api/vendorApi';
 import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorder';
+import { resolveImageUrl } from '@/utils/imageUrl';
 
 const isUUID = (str?: string) =>
   Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
@@ -971,7 +972,7 @@ export default function AiProductChatbot({
                               {/* Product Image Preview */}
                               <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0 relative">
                                 <img
-                                  src={prod.image_url}
+                                  src={resolveImageUrl(prod.image_url)}
                                   alt={prod.name}
                                   className="w-full h-full object-cover"
                                   onError={(e: any) => {
@@ -1382,7 +1383,7 @@ export default function AiProductChatbot({
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
                 <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-white">
                   <img
-                    src={editingProductData.product.image_url}
+                    src={resolveImageUrl(editingProductData.product.image_url)}
                     alt={editingProductData.product.name}
                     className="w-full h-full object-cover"
                     onError={(e: any) => {
@@ -1885,7 +1886,7 @@ export default function AiProductChatbot({
                   <div className="flex items-center gap-2">
                     <div className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-50">
                       <img
-                        src={editingProductData.product.image_url}
+                        src={resolveImageUrl(editingProductData.product.image_url)}
                         alt="Preview"
                         className="w-full h-full object-cover"
                         onError={(e: any) => {
