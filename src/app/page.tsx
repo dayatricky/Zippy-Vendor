@@ -19,6 +19,7 @@ import {
 import { useVendorStore } from '@/store/useVendorStore';
 import { useAppSelector } from '@/store';
 import { useGetOrdersQuery, useGetProductsQuery, useGetStoreRequestQuery } from '@/store/api/vendorApi';
+import { resolveImageUrl } from '@/utils/imageUrl';
 
 export default function VendorDashboard() {
   const { user: authUser } = useAppSelector((state) => state.auth);
@@ -89,7 +90,7 @@ export default function VendorDashboard() {
         name: p.name || 'Product',
         stock: p.stock ?? p.stock_quantity ?? 0,
         isAvailable: p.status === 'ACTIVE' || p.isAvailable !== false,
-        image: primaryImgObj?.image_url || p.image_url || p.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+        image: resolveImageUrl(primaryImgObj?.image_url || p.image_url || p.image),
       };
     });
   })();
@@ -347,9 +348,12 @@ export default function VendorDashboard() {
                     className="p-3 rounded-2xl bg-amber-50/50 border border-amber-200 flex items-center space-x-3"
                   >
                     <img
-                      src={prod.image}
+                      src={resolveImageUrl(prod.image)}
                       alt={prod.name}
                       className="w-12 h-12 rounded-xl object-cover border border-slate-200"
+                      onError={(e: any) => {
+                        e.target.src = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
+                      }}
                     />
                     <div className="flex-1 min-w-0">
                       <h4 className="text-xs font-bold text-slate-900 truncate">{prod.name}</h4>

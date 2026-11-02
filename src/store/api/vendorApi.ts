@@ -1,4 +1,4 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { createApi, fetchBaseQuery, BaseQueryFn, FetchArgs, FetchBaseQueryError } from '@reduxjs/toolkit/query/react';
 import { VendorProfile, CategoryItem, Product, Order, PayoutRequest } from '../useVendorStore';
 
 const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
@@ -8,17 +8,60 @@ export const API_BASE_URL = rawBaseUrl.endsWith('/api/v1')
   ? `${rawBaseUrl}/v1`
   : `${rawBaseUrl}/api/v1`;
 
-export const getReturnEvidenceUrl = (itemId: string, filename: string): string => {
-  if (!itemId || !filename) return '';
+export const getBackendBaseUrl = (): string => {
+  const origin = API_BASE_URL.replace(/\/api(\/v1)?\/?$/, '');
+  return origin || 'http://192.168.1.66:5014';
+};
+
+export const resolveImageUrl = (
+  url?: string | null,
+  fallback = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80'
+): string => {
+  if (!url || typeof url !== 'string' || !url.trim()) return fallback;
+  const trimmed = url.trim();
   if (
-    filename.startsWith('http://') ||
-    filename.startsWith('https://') ||
-    filename.startsWith('data:') ||
-    filename.startsWith('blob:')
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
   ) {
-    return filename;
+    return trimmed;
   }
-  const clean = filename.replace(/^\/+/, '');
+  if (trimmed === '/zippy-logo-crop.jpg' || trimmed === 'zippy-logo-crop.jpg' || trimmed.startsWith('/icons/')) {
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  }
+  const backendBase = getBackendBaseUrl();
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${backendBase}${cleanPath}`;
+};
+
+export const getReturnEvidenceUrl = (itemId: string, filename: string): string => {
+  if (!filename || typeof filename !== 'string') return '';
+  const trimmed = filename.trim();
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+
+  const backendBase = getBackendBaseUrl();
+
+  // If already a full relative API path (e.g. /api/v1/vendor/returns/items/...)
+  if (trimmed.startsWith('/api/') || trimmed.startsWith('api/')) {
+    const clean = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return `${backendBase}${clean}`;
+  }
+
+  // If contains evidence path
+  if (trimmed.includes('/evidence/')) {
+    const clean = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return `${backendBase}${clean.startsWith('/api') ? clean : `/api/v1${clean}`}`;
+  }
+
+  const clean = trimmed.replace(/^\/+/, '');
   return `${API_BASE_URL}/vendor/returns/items/${itemId}/evidence/${encodeURIComponent(clean)}`;
 };
 
@@ -49,21 +92,151 @@ export interface VendorLoginPayload {
   platform?: string;
 }
 
+export interface BankDetailsPayload {
+  accountHolderName: string;
+  bankName: string;
+  bankAccountNumber: string;
+  ifscCode: string;
+  accountType: 'Current' | 'Savings' | string;
+  upiId?: string;
+}
+
+export interface BankDetailsData {
+  accountHolderName?: string;
+  account_holder_name?: string;
+  bankName?: string;
+  bank_name?: string;
+  bankAccountNumber?: string;
+  bank_account_number?: string;
+  ifscCode?: string;
+  ifsc_code?: string;
+  accountType?: string;
+  account_type?: string;
+  upiId?: string;
+  upi_id?: string;
+  [key: string]: any;
+}
+
+export interface BankDetailsResponse {
+  success?: boolean;
+  message?: string;
+  data?: BankDetailsData;
+  accountHolderName?: string;
+  account_holder_name?: string;
+  bankName?: string;
+  bank_name?: string;
+  bankAccountNumber?: string;
+  bank_account_number?: string;
+  ifscCode?: string;
+  ifsc_code?: string;
+  accountType?: string;
+  account_type?: string;
+  upiId?: string;
+  upi_id?: string;
+  [key: string]: any;
+}
+
+const rawBaseQuery = fetchBaseQuery({
+  baseUrl: API_BASE_URL,
+  prepareHeaders: (headers) => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('zippy_vendor_token');
+      if (token) {
+        headers.set('authorization', `Bearer ${token}`);
+      }
+    }
+    return headers;
+  },
+});
+
+const notifySessionExpired = (message: string) => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('zippy_vendor_token');
+    localStorage.removeItem('zippy_vendor_refresh_token');
+    const pathname = window.location.pathname;
+    if (!pathname.startsWith('/login') && !pathname.startsWith('/register')) {
+      sessionStorage.setItem('zippy_auth_message', message);
+      window.dispatchEvent(
+        new CustomEvent('zippy_session_expired', {
+          detail: { message },
+        })
+      );
+    }
+  }
+};
+
+const baseQueryWithReauth: BaseQueryFn<
+  string | FetchArgs,
+  unknown,
+  FetchBaseQueryError
+> = async (args, api, extraOptions) => {
+  let result = await rawBaseQuery(args, api, extraOptions);
+
+  const status = result.error?.status;
+  const errorData = result.error?.data as any;
+  const errorMsg = String(errorData?.msg || errorData?.message || errorData?.error || '').toLowerCase();
+
+  const isTokenExpired =
+    status === 401 ||
+    errorMsg.includes('token has expired') ||
+    errorMsg.includes('jwt expired') ||
+    errorMsg.includes('token expired') ||
+    errorMsg.includes('unauthorized') ||
+    errorMsg.includes('invalid token');
+
+  if (isTokenExpired) {
+    if (typeof window !== 'undefined') {
+      const refreshToken = localStorage.getItem('zippy_vendor_refresh_token');
+      if (refreshToken) {
+        try {
+          const refreshResult = await rawBaseQuery(
+            {
+              url: '/vendor/auth/refresh-token',
+              method: 'POST',
+              body: { refreshToken },
+            },
+            api,
+            extraOptions
+          );
+
+          const refreshData = refreshResult.data as any;
+          const dataPayload = refreshData?.data || refreshData;
+          const newAccessToken =
+            dataPayload?.accessToken ||
+            dataPayload?.token ||
+            refreshData?.accessToken ||
+            refreshData?.token;
+          const newRefreshToken =
+            dataPayload?.refreshToken ||
+            refreshData?.refreshToken;
+
+          if (newAccessToken) {
+            localStorage.setItem('zippy_vendor_token', newAccessToken);
+            if (newRefreshToken) {
+              localStorage.setItem('zippy_vendor_refresh_token', newRefreshToken);
+            }
+            // Retry the original query with the refreshed access token
+            result = await rawBaseQuery(args, api, extraOptions);
+          } else {
+            notifySessionExpired('Authentication token has expired. Please log in again to continue.');
+          }
+        } catch (refreshErr) {
+          console.error('Auto token refresh failed in RTK Query:', refreshErr);
+          notifySessionExpired('Authentication token has expired. Please log in again to continue.');
+        }
+      } else {
+        notifySessionExpired('Authentication token has expired. Please log in again to continue.');
+      }
+    }
+  }
+
+  return result;
+};
+
 export const vendorApi = createApi({
   reducerPath: 'vendorApi',
-  baseQuery: fetchBaseQuery({
-    baseUrl: API_BASE_URL,
-    prepareHeaders: (headers) => {
-      if (typeof window !== 'undefined') {
-        const token = localStorage.getItem('zippy_vendor_token');
-        if (token) {
-          headers.set('authorization', `Bearer ${token}`);
-        }
-      }
-      return headers;
-    },
-  }),
-  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts', 'Returns', 'Withdrawals'],
+  baseQuery: baseQueryWithReauth,
+  tagTypes: ['Vendor', 'Products', 'Categories', 'Orders', 'Payouts', 'Returns', 'Withdrawals', 'BankDetails'],
   endpoints: (builder) => ({
     // Auth Endpoints matching Swagger Specs
     vendorSignup: builder.mutation<{ success: boolean; message: string; data?: any }, VendorSignupPayload>({
@@ -231,19 +404,25 @@ export const vendorApi = createApi({
         unit?: string;
         pack_size?: string;
         mrp?: number;
+        price?: number;
+        stock?: number;
         stock_quantity?: number;
         images?: Array<{ image_url: string; display_order?: number; is_primary?: boolean }>;
         status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | string;
       }
     >({
       query: (rawBody) => {
-        const { price, stock, ...cleanBody } = rawBody as any;
+        const { ...cleanBody } = rawBody as any;
         const generatedSlug = cleanBody.slug || cleanBody.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
         const imagesPayload = cleanBody.images && cleanBody.images.length > 0
           ? cleanBody.images
           : cleanBody.image
             ? [{ image_url: cleanBody.image, display_order: 0, is_primary: true }]
             : [];
+
+        const finalSellingPrice = Number(cleanBody.price ?? cleanBody.mrp ?? 0);
+        const finalMrpPrice = Number(cleanBody.mrp ?? cleanBody.price ?? 0);
+        const finalStock = Number(cleanBody.stock_quantity ?? cleanBody.stock ?? 25);
 
         return {
           url: '/vendor/products',
@@ -258,8 +437,9 @@ export const vendorApi = createApi({
             barcode: cleanBody.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
             unit: cleanBody.unit || '1 kg',
             pack_size: cleanBody.pack_size || cleanBody.unit || '1 kg',
-            mrp: Number(cleanBody.mrp ?? price) || 0,
-            stock_quantity: Number(cleanBody.stock_quantity ?? stock ?? 100),
+            price: finalSellingPrice,
+            mrp: finalMrpPrice,
+            stock_quantity: finalStock,
             images: imagesPayload,
             status: cleanBody.status || 'PENDING',
           },
@@ -294,6 +474,8 @@ export const vendorApi = createApi({
         method: 'PATCH',
         body: {
           ...body,
+          ...(price !== undefined ? { price: Number(price) } : {}),
+          ...(body.mrp !== undefined ? { mrp: Number(body.mrp) } : {}),
           ...(stock !== undefined || body.stock_quantity !== undefined
             ? { stock_quantity: Number(body.stock_quantity ?? stock) }
             : {}),
@@ -308,6 +490,100 @@ export const vendorApi = createApi({
         method: 'DELETE',
       }),
       invalidatesTags: ['Products'],
+    }),
+
+    // Product Images Upload & Patch matching Swagger UI Specs:
+    // 1. POST /api/v1/vendor/products/{productId}/images (multipart/form-data: file, image_url, display_order, is_primary)
+    // 2. PATCH /api/v1/vendor/products/{productId}/images/{imageId} (multipart/form-data: file, image_url, display_order, is_primary)
+    uploadProductImage: builder.mutation<
+      { success: boolean; data?: any; image_url?: string; url?: string; id?: string; message?: string },
+      { productId: string; file?: File; image_url?: string; formData?: FormData; is_primary?: boolean; display_order?: number }
+    >({
+      query: ({ productId, file, image_url, formData, is_primary, display_order }) => {
+        let body = formData;
+        if (!body) {
+          body = new FormData();
+          if (file) {
+            body.append('file', file); // Strict Swagger binary field: exactly 1 file
+          }
+          if (image_url) {
+            body.append('image_url', image_url);
+          }
+          if (is_primary !== undefined) {
+            body.append('is_primary', String(is_primary));
+          }
+          if (display_order !== undefined) {
+            body.append('display_order', String(display_order));
+          }
+        }
+        return {
+          url: `/vendor/products/${productId}/images`,
+          method: 'POST',
+          body,
+        };
+      },
+      invalidatesTags: ['Products'],
+    }),
+
+    updateProductImage: builder.mutation<
+      { success: boolean; data?: any; message?: string },
+      { productId: string; imageId: string; file?: File; image_url?: string; formData?: FormData; is_primary?: boolean; display_order?: number }
+    >({
+      query: ({ productId, imageId, file, image_url, formData, is_primary, display_order }) => {
+        let body = formData;
+        if (!body) {
+          body = new FormData(); // Swagger requires multipart/form-data for PATCH
+          if (file) {
+            body.append('file', file); // Strict Swagger binary field: exactly 1 file
+          }
+          if (image_url) {
+            body.append('image_url', image_url);
+          }
+          if (is_primary !== undefined) {
+            body.append('is_primary', String(is_primary));
+          }
+          if (display_order !== undefined) {
+            body.append('display_order', String(display_order));
+          }
+        }
+        return {
+          url: `/vendor/products/${productId}/images/${imageId}`,
+          method: 'PATCH',
+          body,
+        };
+      },
+      invalidatesTags: ['Products'],
+    }),
+
+    deleteProductImage: builder.mutation<
+      { success: boolean; message?: string },
+      { productId: string; imageId: string }
+    >({
+      query: ({ productId, imageId }) => ({
+        url: `/vendor/products/${productId}/images/${imageId}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: ['Products'],
+    }),
+
+    // Category Image Upload (Optional support for backend local category image upload)
+    uploadCategoryImage: builder.mutation<
+      { success: boolean; data?: any; image_url?: string; url?: string; message?: string },
+      { categoryId: string; file?: File; formData?: FormData }
+    >({
+      query: ({ categoryId, file, formData }) => {
+        let body = formData;
+        if (!body && file) {
+          body = new FormData();
+          body.append('file', file);
+        }
+        return {
+          url: `/vendor/categories/${categoryId}/images`,
+          method: 'POST',
+          body,
+        };
+      },
+      invalidatesTags: ['Categories'],
     }),
 
     // Orders Stream Endpoints matching Swagger Spec (/vendor/orders)
@@ -627,6 +903,35 @@ export const vendorApi = createApi({
       },
       invalidatesTags: ['Returns'],
     }),
+
+    // ==========================================
+    // VENDOR BANK DETAILS (Swagger Specification)
+    // 1. GET /api/v1/vendor/bank-details
+    // 2. PATCH /api/v1/vendor/bank-details
+    // ==========================================
+    getBankDetails: builder.query<BankDetailsResponse, void>({
+      query: () => '/vendor/bank-details',
+      providesTags: ['BankDetails', 'Vendor'],
+    }),
+
+    updateBankDetails: builder.mutation<
+      { success?: boolean; message?: string; data?: any; [key: string]: any },
+      BankDetailsPayload
+    >({
+      query: (body) => ({
+        url: '/vendor/bank-details',
+        method: 'PATCH',
+        body: {
+          accountHolderName: body.accountHolderName.trim(),
+          bankName: body.bankName.trim(),
+          bankAccountNumber: body.bankAccountNumber.trim(),
+          ifscCode: body.ifscCode.trim().toUpperCase(),
+          accountType: body.accountType,
+          ...(body.upiId?.trim() ? { upiId: body.upiId.trim() } : {}),
+        },
+      }),
+      invalidatesTags: ['BankDetails', 'Vendor', 'Withdrawals', 'Payouts'],
+    }),
   }),
 });
 
@@ -650,6 +955,10 @@ export const {
   useAddProductMutation,
   useUpdateProductMutation,
   useDeleteProductMutation,
+  useUploadProductImageMutation,
+  useUpdateProductImageMutation,
+  useDeleteProductImageMutation,
+  useUploadCategoryImageMutation,
   useGetOrdersQuery,
   useGetOrderDetailsQuery,
   useUpdateOrderStatusMutation,
@@ -666,4 +975,6 @@ export const {
   useGetReturnItemEvidenceQuery,
   useUpdateReturnItemStatusMutation,
   useUpdateReturnStatusMutation,
+  useGetBankDetailsQuery,
+  useUpdateBankDetailsMutation,
 } = vendorApi;
