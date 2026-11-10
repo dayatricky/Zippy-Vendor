@@ -15,6 +15,7 @@ interface ImageUploadFieldProps {
   uploadStatusText?: string;
   helperText?: string;
   aspectRatio?: 'square' | 'video' | 'banner';
+  allowUrl?: boolean;
 }
 
 export default function ImageUploadField({
@@ -28,6 +29,7 @@ export default function ImageUploadField({
   uploadStatusText = 'Uploading image to backend...',
   helperText = 'Supported formats: JPG, PNG, WEBP (Max: 5MB)',
   aspectRatio = 'square',
+  allowUrl = true,
 }: ImageUploadFieldProps) {
   const [activeTab, setActiveTab] = useState<'upload' | 'url'>('upload');
   const [isDragging, setIsDragging] = useState(false);
@@ -124,32 +126,34 @@ export default function ImageUploadField({
         </label>
 
         {/* Tab switch between file upload & web URL */}
-        <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 text-[11px]">
-          <button
-            type="button"
-            onClick={() => setActiveTab('upload')}
-            className={`px-2.5 py-0.5 rounded-md font-bold transition-all flex items-center space-x-1 cursor-pointer ${
-              activeTab === 'upload'
-                ? 'bg-white text-[#167a46] shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Upload className="w-3 h-3" />
-            <span>Upload File</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('url')}
-            className={`px-2.5 py-0.5 rounded-md font-bold transition-all flex items-center space-x-1 cursor-pointer ${
-              activeTab === 'url'
-                ? 'bg-white text-[#167a46] shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <LinkIcon className="w-3 h-3" />
-            <span>Image URL</span>
-          </button>
-        </div>
+        {allowUrl && (
+          <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setActiveTab('upload')}
+              className={`px-2.5 py-0.5 rounded-md font-bold transition-all flex items-center space-x-1 cursor-pointer ${
+                activeTab === 'upload'
+                  ? 'bg-white text-[#167a46] shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Upload className="w-3 h-3" />
+              <span>Upload File</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('url')}
+              className={`px-2.5 py-0.5 rounded-md font-bold transition-all flex items-center space-x-1 cursor-pointer ${
+                activeTab === 'url'
+                  ? 'bg-white text-[#167a46] shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <LinkIcon className="w-3 h-3" />
+              <span>Image URL</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Hidden File Input */}
@@ -259,7 +263,7 @@ export default function ImageUploadField({
       )}
 
       {/* Active Tab: Web Image URL */}
-      {activeTab === 'url' && (
+      {allowUrl && activeTab === 'url' && (
         <div className="space-y-2">
           <input
             type="url"

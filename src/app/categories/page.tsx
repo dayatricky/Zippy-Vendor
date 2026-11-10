@@ -629,6 +629,7 @@ export default function CategoriesPage() {
                 isUploading={isUploadingImage}
                 uploadStatusText="Saving category banner on server..."
                 aspectRatio="banner"
+                allowUrl={false}
               />
 
               <div className="pt-2 flex justify-end space-x-3">
@@ -714,6 +715,7 @@ export default function CategoriesPage() {
                 isUploading={isUploadingImage}
                 uploadStatusText="Uploading category banner to server..."
                 aspectRatio="banner"
+                allowUrl={false}
               />
 
               <div className="pt-2 flex justify-end space-x-3">
