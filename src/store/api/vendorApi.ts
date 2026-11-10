@@ -413,7 +413,7 @@ export const vendorApi = createApi({
       }
     >({
       query: (rawBody) => {
-        const { price, stock, ...cleanBody } = rawBody as any;
+        const { price, stock, selling_price, ...cleanBody } = rawBody as any;
         const generatedSlug = cleanBody.slug || cleanBody.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
         
         // Exact 1:1 Swagger structure for images: Array<{ image_url, display_order, is_primary }>
@@ -432,9 +432,9 @@ export const vendorApi = createApi({
               },
             ];
 
-        // Backend accepts mrp (e.g. 100) and selling_price (e.g. 90)
-        const effectiveSellingPrice = Number(cleanBody.selling_price ?? price ?? cleanBody.price ?? cleanBody.mrp ?? 0);
-        const effectiveMrp = Number(cleanBody.mrp ?? effectiveSellingPrice);
+        // Backend NestJS DTO strictly only has 'mrp' (forbidNonWhitelisted: true).
+        // Neither 'price' nor 'selling_price' is allowed in the payload.
+        const effectiveMrp = Number(cleanBody.mrp ?? selling_price ?? price ?? cleanBody.price ?? 0);
         const finalStock = Number(cleanBody.stock_quantity ?? stock ?? 100);
 
         return {
@@ -451,7 +451,6 @@ export const vendorApi = createApi({
             unit: String(cleanBody.unit || '1 kg'),
             pack_size: String(cleanBody.pack_size || cleanBody.unit || '1 kg'),
             mrp: effectiveMrp,
-            selling_price: effectiveSellingPrice,
             stock_quantity: finalStock,
             images: imagesPayload,
             status: cleanBody.status || 'ACTIVE',
@@ -483,20 +482,31 @@ export const vendorApi = createApi({
         status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | string;
       }
     >({
-      query: ({ id, price, stock, ...body }) => {
-        const effectiveMrp = body.mrp !== undefined ? Number(body.mrp) : undefined;
-        const effectiveSellingPrice = body.selling_price !== undefined ? Number(body.selling_price) : price !== undefined ? Number(price) : undefined;
-        const stockQty = body.stock_quantity !== undefined ? Number(body.stock_quantity) : stock !== undefined ? Number(stock) : undefined;
+      query: ({ id, price, stock, selling_price, ...body }) => {
+        // Build strictly whitelisted body matching UpdateProductDto
+        const patchBody: Record<string, any> = {};
+        if (body.category_id !== undefined) patchBody.category_id = String(body.category_id);
+        if (body.name !== undefined) patchBody.name = String(body.name);
+        if (body.slug !== undefined) patchBody.slug = String(body.slug);
+        if (body.description !== undefined) patchBody.description = String(body.description);
+        if (body.brand_name !== undefined) patchBody.brand_name = String(body.brand_name);
+        if (body.sku !== undefined) patchBody.sku = String(body.sku);
+        if (body.barcode !== undefined) patchBody.barcode = String(body.barcode);
+        if (body.unit !== undefined) patchBody.unit = String(body.unit);
+        if (body.pack_size !== undefined) patchBody.pack_size = String(body.pack_size);
+        if (body.mrp !== undefined || selling_price !== undefined || price !== undefined) {
+          patchBody.mrp = Number(body.mrp ?? selling_price ?? price);
+        }
+        if (body.stock_quantity !== undefined || stock !== undefined) {
+          patchBody.stock_quantity = Number(body.stock_quantity ?? stock);
+        }
+        if (body.images !== undefined) patchBody.images = body.images;
+        if (body.status !== undefined) patchBody.status = body.status;
 
         return {
           url: `/vendor/products/${id}`,
           method: 'PATCH',
-          body: {
-            ...body,
-            ...(effectiveMrp !== undefined ? { mrp: effectiveMrp } : {}),
-            ...(effectiveSellingPrice !== undefined ? { selling_price: effectiveSellingPrice } : {}),
-            ...(stockQty !== undefined ? { stock_quantity: stockQty } : {}),
-          },
+          body: patchBody,
         };
       },
       invalidatesTags: ['Products'],
