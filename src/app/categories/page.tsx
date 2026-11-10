@@ -6,7 +6,6 @@ import {
   Grid,
   Plus,
   Search,
-  Check,
   X,
   Trash2,
   FolderPlus,
@@ -34,7 +33,6 @@ export default function CategoriesPage() {
   const {
     categories: localCategories,
     addCategory,
-    toggleCategoryStatus,
     deleteCategory,
   } = useVendorStore();
 
@@ -312,29 +310,6 @@ export default function CategoriesPage() {
     }
   };
 
-  const handleToggleStatus = async (catId: string, currentActive: boolean) => {
-    if (!isApproved) {
-      toast.error('Store onboarding approval required to change category status.');
-      return;
-    }
-    setApiError('');
-    try {
-      if (isUUID(catId)) {
-        await updateCategoryApi({
-          id: catId,
-          status: currentActive ? 'INACTIVE' : 'ACTIVE',
-        }).unwrap();
-      }
-      toast.success(`Category status set to ${currentActive ? 'INACTIVE' : 'ACTIVE'}`);
-    } catch (err: any) {
-      console.error('Update Category Status Error:', err);
-      const msg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to update status';
-      setApiError(msg);
-      toast.error(msg);
-    }
-    toggleCategoryStatus(catId);
-  };
-
   const handleDeleteCategory = async (catId: string) => {
     if (!isApproved) {
       toast.error('Store onboarding approval required to delete categories.');
@@ -453,7 +428,7 @@ export default function CategoriesPage() {
       )}
 
       {/* Category Stats Overview */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="white-card p-4 flex items-center justify-between border border-slate-200 shadow-sm">
           <div>
             <span className="text-xs text-slate-500 font-bold uppercase">Total Categories</span>
@@ -466,25 +441,13 @@ export default function CategoriesPage() {
 
         <div className="white-card p-4 flex items-center justify-between border border-slate-200 shadow-sm">
           <div>
-            <span className="text-xs text-slate-500 font-bold uppercase">Active Categories</span>
+            <span className="text-xs text-slate-500 font-bold uppercase">Total Catalog Items</span>
             <div className="text-2xl font-black text-[#167a46]">
-              {displayCategories.filter((c: any) => c.isActive).length}
+              {displayCategories.reduce((sum: number, c: any) => sum + (c.productCount || 0), 0)}
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-100 text-[#167a46] flex items-center justify-center border border-emerald-300">
-            <Check className="w-5 h-5" />
-          </div>
-        </div>
-
-        <div className="white-card p-4 flex items-center justify-between border border-slate-200 shadow-sm">
-          <div>
-            <span className="text-xs text-slate-500 font-bold uppercase">Hidden / Inactive</span>
-            <div className="text-2xl font-black text-slate-500">
-              {displayCategories.filter((c: any) => !c.isActive).length}
-            </div>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center border border-slate-200">
-            <X className="w-5 h-5" />
+            <Package className="w-5 h-5" />
           </div>
         </div>
       </div>
@@ -544,9 +507,7 @@ export default function CategoriesPage() {
           {filteredCategories.map((category: any) => (
             <div
               key={category.id}
-              className={`white-card p-5 space-y-4 relative overflow-hidden transition-all flex flex-col justify-between shadow-sm border ${
-                !category.isActive ? 'opacity-60 bg-slate-50 border-slate-300' : 'border-slate-200'
-              }`}
+              className="white-card p-5 space-y-4 relative overflow-hidden transition-all flex flex-col justify-between shadow-sm border border-slate-200 hover:shadow-md"
             >
               <div className="space-y-3">
                 {/* Category Image Header */}
@@ -561,18 +522,6 @@ export default function CategoriesPage() {
                   />
                   <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-slate-800 font-mono">
                     /{category.slug}
-                  </div>
-
-                  <div className="absolute top-3 right-3 flex items-center space-x-1.5">
-                    <span
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-black border backdrop-blur-md ${
-                        category.isActive
-                          ? 'bg-emerald-600 border-emerald-500 text-white'
-                          : 'bg-slate-600 border-slate-500 text-white'
-                      }`}
-                    >
-                      {category.isActive ? 'ACTIVE' : 'HIDDEN'}
-                    </span>
                   </div>
                 </div>
 
@@ -591,39 +540,25 @@ export default function CategoriesPage() {
                 </div>
               </div>
 
-              {/* Actions: Toggle Active Switch, Edit & Delete */}
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-semibold text-slate-600">Active:</span>
-                  <button
-                    onClick={() => handleToggleStatus(category.id, category.isActive)}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
-                      category.isActive ? 'bg-[#167a46]' : 'bg-slate-300'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
-                        category.isActive ? 'translate-x-4' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
-
+              {/* Actions: Edit & Delete */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end">
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => handleEditCategoryClick(category)}
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-[#167a46] hover:bg-emerald-50 transition-colors cursor-pointer"
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-slate-600 hover:text-[#167a46] hover:bg-emerald-50 text-xs font-semibold transition-colors cursor-pointer"
                     title="Edit Category"
                   >
-                    <Edit className="w-4 h-4" />
+                    <Edit className="w-3.5 h-3.5" />
+                    <span>Edit</span>
                   </button>
 
                   <button
                     onClick={() => handleDeleteCategory(category.id)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    className="flex items-center space-x-1 px-3 py-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-colors cursor-pointer"
                     title="Delete Category"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete</span>
                   </button>
                 </div>
               </div>
