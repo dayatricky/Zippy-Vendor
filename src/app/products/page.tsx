@@ -690,7 +690,6 @@ export default function ProductsPage() {
                   (patchRes as any)?.image_url ||
                   (patchRes as any)?.url;
                 if (serverPath) updatedImageUrl = serverPath;
-                toast.success('Product image updated on backend! 📸');
               } catch (patchErr) {
                 console.warn('PATCH product image failed, falling back to POST upload:', patchErr);
                 const postRes = await uploadProductImage({
@@ -706,7 +705,6 @@ export default function ProductsPage() {
                   (postRes as any)?.image_url ||
                   (postRes as any)?.url;
                 if (serverPath) updatedImageUrl = serverPath;
-                toast.success('Product image uploaded to backend! 📸');
               }
             } else {
               // POST /api/v1/vendor/products/:productId/images
@@ -723,7 +721,6 @@ export default function ProductsPage() {
                 (postRes as any)?.image_url ||
                 (postRes as any)?.url;
               if (serverPath) updatedImageUrl = serverPath;
-              toast.success('Product image uploaded to backend! 📸');
             }
           } catch (imgErr: any) {
             console.error('Update Image Error:', imgErr);
@@ -902,7 +899,6 @@ export default function ProductsPage() {
           if (serverPath) {
             uploadedImageUrl = serverPath;
           }
-          toast.success('Product image saved on backend local storage! 📸');
         } catch (imgErr: any) {
           console.error('Image upload failed after product creation:', imgErr);
         } finally {
