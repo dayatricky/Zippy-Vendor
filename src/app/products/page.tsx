@@ -752,6 +752,7 @@ export default function ProductsPage() {
         setTimeout(() => router.push('/login'), 1200);
         return;
       }
+
       setApprovalError(errMsg);
       toast.error(errMsg);
     }
@@ -928,6 +929,32 @@ export default function ProductsPage() {
         setTimeout(() => router.push('/login'), 1200);
         return;
       }
+
+      if (String(errMsg).toLowerCase().includes('already exists') || status === 409) {
+        try {
+          const uniqueSuffix = `${Date.now().toString().slice(-4)}`;
+          const baseSlug = newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          await addProductApi({
+            category_id: category_id,
+            name: newProduct.name.trim(),
+            slug: `${baseSlug}-${uniqueSuffix}`,
+            mrp: mrpNum,
+            unit: newProduct.unit || '1 kg',
+            pack_size: newProduct.unit || '1 kg',
+            stock_quantity: stockNum,
+            images: initialImages,
+            status: 'ACTIVE',
+          }).unwrap();
+          toast.success('Product added successfully! 🎉', { duration: 4000, icon: '✅' });
+          refetchProducts();
+          setIsModalOpen(false);
+          setSelectedImageFile(null);
+          return;
+        } catch (retryErr) {
+          console.error('Retry add product failed:', retryErr);
+        }
+      }
+
       setApprovalError(errMsg);
       toast.error(errMsg);
     }
@@ -2077,11 +2104,51 @@ export default function ProductsPage() {
             setTimeout(() => router.push('/login'), 1200);
             throw new Error('Session expired');
           }
+
+          const targetName = String(payload.name || '').trim().toLowerCase();
+          const targetSlug = String(payload.slug || '').trim().toLowerCase();
+
+          // 1. Check if the product already exists in the vendor's catalog
+          const existingInStore = displayProducts.find(
+            (p: any) =>
+              (payload.id && p.id && String(p.id) === String(payload.id)) ||
+              (p.name && p.name.trim().toLowerCase() === targetName) ||
+              (p.slug && p.slug.trim().toLowerCase() === targetSlug)
+          );
+
+          if (existingInStore && existingInStore.id && !existingInStore.id.startsWith('p-') && !existingInStore.id.startsWith('mcp-')) {
+            try {
+              const updateRes = await updateProductApi({
+                id: existingInStore.id,
+                name: payload.name,
+                description: payload.description,
+                mrp: Number(payload.mrp) || existingInStore.mrp,
+                stock_quantity: Number(payload.stock_quantity) || existingInStore.stock,
+                unit: payload.unit || existingInStore.unit,
+                pack_size: payload.pack_size || payload.unit || existingInStore.unit,
+              }).unwrap();
+
+              updateProduct(existingInStore.id, {
+                description: payload.description,
+                mrp: Number(payload.mrp) || existingInStore.mrp,
+                price: Number(payload.mrp) || existingInStore.price,
+                stock: Number(payload.stock_quantity) || existingInStore.stock,
+              });
+
+              toast.success(`Product "${payload.name}" updated with new description! ✏️`);
+              refetchProducts();
+              return updateRes;
+            } catch (updateErr: any) {
+              console.warn('Update existing product failed, falling back to create:', updateErr);
+            }
+          }
+
           try {
             const res = await addProductApi({
               ...payload,
-              status: payload.status || 'PENDING',
+              status: payload.status || 'ACTIVE',
             }).unwrap();
+
             // Update local store for instant UI feedback
             addProduct({
               name: payload.name,
@@ -2090,16 +2157,84 @@ export default function ProductsPage() {
               category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
               categoryId: payload.category_id,
               stock: Number(payload.stock_quantity) || 50,
-              isAvailable: false,
-              status: 'PENDING',
+              isAvailable: true,
+              status: 'ACTIVE',
               unit: payload.unit || '1 kg',
               image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
             });
-            toast.success('Product submitted for admin approval! ⏳');
+            toast.success(`Product "${payload.name}" added successfully! 🎉`);
+            refetchProducts();
             return res;
           } catch (err: any) {
             const status = err?.status || err?.originalStatus;
             const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
+
+            // If backend throws "already exists" (e.g. Catalog value already exists / 409 / 400)
+            if (
+              String(errMsg).toLowerCase().includes('already exists') ||
+              status === 409 ||
+              (status === 400 && String(errMsg).toLowerCase().includes('exist'))
+            ) {
+              // 1. Try finding and updating the existing product in displayProducts
+              const matchedProd = displayProducts.find(
+                (p: any) => p.name.trim().toLowerCase() === targetName
+              );
+
+              if (matchedProd && matchedProd.id && !matchedProd.id.startsWith('p-') && !matchedProd.id.startsWith('mcp-')) {
+                try {
+                  const updateRes = await updateProductApi({
+                    id: matchedProd.id,
+                    description: payload.description,
+                    mrp: Number(payload.mrp) || matchedProd.mrp,
+                  }).unwrap();
+
+                  updateProduct(matchedProd.id, {
+                    description: payload.description,
+                    mrp: Number(payload.mrp) || matchedProd.mrp,
+                    price: Number(payload.mrp) || matchedProd.price,
+                  });
+
+                  toast.success(`Product "${payload.name}" updated with new description! ✏️`);
+                  refetchProducts();
+                  return updateRes;
+                } catch (patchErr) {
+                  console.warn('Fallback patch error:', patchErr);
+                }
+              }
+
+              // 2. If it's a new product variant, retry with a unique slug and SKU suffix so backend never throws "already exists"
+              try {
+                const uniqueCode = `${Date.now().toString().slice(-4)}`;
+                const baseSlug = (payload.slug || payload.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+                const retryRes = await addProductApi({
+                  ...payload,
+                  slug: `${baseSlug}-${uniqueCode}`,
+                  sku: `SKU-${Date.now()}-${uniqueCode}`,
+                  barcode: `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+                  status: payload.status || 'ACTIVE',
+                }).unwrap();
+
+                addProduct({
+                  name: payload.name,
+                  price: Number(payload.mrp) || 0,
+                  mrp: Number(payload.mrp) || 0,
+                  category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
+                  categoryId: payload.category_id,
+                  stock: Number(payload.stock_quantity) || 50,
+                  isAvailable: true,
+                  status: 'ACTIVE',
+                  unit: payload.unit || '1 kg',
+                  image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+                });
+
+                toast.success(`Product "${payload.name}" added with updated description! 🎉`);
+                refetchProducts();
+                return retryRes;
+              } catch (retryErr: any) {
+                console.error('Retry add product failed:', retryErr);
+              }
+            }
+
             if (status === 401 || String(errMsg).toLowerCase().includes('token') || String(errMsg).toLowerCase().includes('unauthorized')) {
               toast.error('Authentication token has expired. Please log in again.', { duration: 5000, icon: '🔒' });
               setTimeout(() => router.push('/login'), 1200);

@@ -59,6 +59,7 @@ const formatMessageTextWithRupees = (text?: string): string => {
 };
 
 export interface AiSuggestedProduct {
+  id?: string;
   name: string;
   slug: string;
   category_id?: string;
@@ -667,6 +668,7 @@ export default function AiProductChatbot({
     }
 
     const payload = {
+      ...(product.id ? { id: product.id } : {}),
       category_id: targetCatId,
       name: product.name,
       slug: product.slug || product.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
@@ -686,7 +688,6 @@ export default function AiProductChatbot({
 
     try {
       await onAddProduct(payload);
-      toast.success(`🛒 "${product.name}" added to catalog!`);
 
       // Mark as added in UI
       setMessages((prev) =>

@@ -57,6 +57,7 @@ export interface Product {
   sku?: string;
   barcode?: string;
   brand_name?: string;
+  description?: string;
 }
 
 export interface OrderItem {
