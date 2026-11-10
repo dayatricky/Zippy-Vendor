@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
   Settings,
@@ -86,9 +86,10 @@ export default function SettingsPage() {
   const [showAccountNumber, setShowAccountNumber] = useState(false);
   const [bankSuccessMsg, setBankSuccessMsg] = useState('');
   const [bankErrorMsg, setBankErrorMsg] = useState('');
+  const [isBankDirty, setIsBankDirty] = useState(false);
 
-  // Sync Bank Details from GET /api/v1/vendor/bank-details
-  useEffect(() => {
+  // Helper to extract saved bank details from API response or store
+  const getSavedBankDetails = useCallback(() => {
     const rawBank = (bankDataResponse as any)?.data || (bankDataResponse as any)?.bankDetails || bankDataResponse;
     const storeReq = requestObj;
 
@@ -136,16 +137,54 @@ export default function SettingsPage() {
       vendor.upiId ||
       '';
 
-    setBankForm((prev) => ({
-      accountHolderName: prev.accountHolderName || holder,
-      bankName: prev.bankName || bName,
-      bankAccountNumber: prev.bankAccountNumber || accNum,
-      confirmBankAccountNumber: prev.confirmBankAccountNumber || accNum,
-      ifscCode: prev.ifscCode || ifsc.toUpperCase(),
-      accountType: prev.accountType || accType,
-      upiId: prev.upiId || upi,
-    }));
+    return {
+      accountHolderName: holder,
+      bankName: bName,
+      bankAccountNumber: accNum,
+      confirmBankAccountNumber: accNum,
+      ifscCode: ifsc.toUpperCase(),
+      accountType: accType,
+      upiId: upi,
+    };
   }, [bankDataResponse, requestObj, vendor]);
+
+  // Sync Bank Details from GET /api/v1/vendor/bank-details when loaded
+  useEffect(() => {
+    const saved = getSavedBankDetails();
+    setBankForm((prev) => {
+      // If user hasn't edited anything, populate from saved
+      if (!isBankDirty) {
+        return saved;
+      }
+      return prev;
+    });
+  }, [getSavedBankDetails, isBankDirty]);
+
+  // Handle Bank Form Change
+  const handleBankChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setIsBankDirty(true);
+    if (bankErrorMsg) setBankErrorMsg('');
+    const { name, value } = e.target;
+    if (name === 'ifscCode') {
+      setBankForm((prev) => ({ ...prev, [name]: value.toUpperCase().trim() }));
+    } else if (name === 'bankAccountNumber' || name === 'confirmBankAccountNumber') {
+      // allow only numeric characters
+      const cleanVal = value.replace(/[^0-9]/g, '');
+      setBankForm((prev) => ({ ...prev, [name]: cleanVal }));
+    } else {
+      setBankForm((prev) => ({ ...prev, [name]: value }));
+    }
+  };
+
+  // Discard changes & restore previously saved details
+  const handleDiscardBankChanges = () => {
+    const saved = getSavedBankDetails();
+    setBankForm(saved);
+    setIsBankDirty(false);
+    setBankErrorMsg('');
+    setBankSuccessMsg('');
+    toast('All unsaved changes discarded. Restored previous details.', { icon: '🔄' });
+  };
 
   // ==========================================
   // STORE PROFILE FORM STATE
@@ -176,20 +215,6 @@ export default function SettingsPage() {
       }));
     }
   }, [authUser, requestObj]);
-
-  // Handle Bank Form Change
-  const handleBankChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    if (name === 'ifscCode') {
-      setBankForm((prev) => ({ ...prev, [name]: value.toUpperCase().trim() }));
-    } else if (name === 'bankAccountNumber' || name === 'confirmBankAccountNumber') {
-      // allow only numeric characters
-      const cleanVal = value.replace(/[^0-9]/g, '');
-      setBankForm((prev) => ({ ...prev, [name]: cleanVal }));
-    } else {
-      setBankForm((prev) => ({ ...prev, [name]: value }));
-    }
-  };
 
   // Submit Bank Details (PATCH /api/v1/vendor/bank-details)
   const handleBankSubmit = async (e: React.FormEvent) => {
@@ -249,6 +274,7 @@ export default function SettingsPage() {
       const msg = res?.message || 'Bank settlement details updated successfully!';
       setBankSuccessMsg(msg);
       toast.success(msg);
+      setIsBankDirty(false);
 
       // Update zustand store
       updateVendorProfile({
@@ -266,14 +292,30 @@ export default function SettingsPage() {
 
       setTimeout(() => setBankSuccessMsg(''), 4000);
     } catch (err: any) {
-      const errText =
-        err?.data?.message ||
-        err?.data?.error ||
-        err?.message ||
-        'Failed to update bank details. Please check your data and try again.';
-      const formatted = Array.isArray(errText) ? errText.join(', ') : errText;
-      setBankErrorMsg(formatted);
-      toast.error(formatted);
+      let errText = '';
+      if (typeof err === 'string') {
+        errText = err;
+      } else if (err?.data) {
+        if (typeof err.data.msg === 'string' && err.data.msg.trim()) {
+          errText = err.data.msg.trim();
+        } else if (typeof err.data.message === 'string' && err.data.message.trim()) {
+          errText = err.data.message.trim();
+        } else if (Array.isArray(err.data.message) && err.data.message.length > 0) {
+          errText = err.data.message.map((m: any) => (typeof m === 'string' ? m : JSON.stringify(m))).join(', ');
+        } else if (Array.isArray(err.data.msg) && err.data.msg.length > 0) {
+          errText = err.data.msg.map((m: any) => (typeof m === 'string' ? m : JSON.stringify(m))).join(', ');
+        } else if (typeof err.data.error === 'string' && err.data.error.trim() && err.data.error !== 'Bad Request') {
+          errText = err.data.error.trim();
+        }
+      }
+      if (!errText && typeof err?.message === 'string') {
+        errText = err.message;
+      }
+      if (!errText) {
+        errText = 'Failed to update bank details. Please check your data and try again.';
+      }
+      setBankErrorMsg(errText);
+      toast.error(errText);
     }
   };
 
@@ -667,7 +709,10 @@ export default function SettingsPage() {
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => setBankForm((prev) => ({ ...prev, accountType: 'Current' }))}
+                          onClick={() => {
+                            setIsBankDirty(true);
+                            setBankForm((prev) => ({ ...prev, accountType: 'Current' }));
+                          }}
                           className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center space-x-1.5 ${bankForm.accountType === 'Current'
                               ? 'bg-[#167a46] border-[#167a46] text-white shadow-xs'
                               : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
@@ -679,7 +724,10 @@ export default function SettingsPage() {
 
                         <button
                           type="button"
-                          onClick={() => setBankForm((prev) => ({ ...prev, accountType: 'Savings' }))}
+                          onClick={() => {
+                            setIsBankDirty(true);
+                            setBankForm((prev) => ({ ...prev, accountType: 'Savings' }));
+                          }}
                           className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center space-x-1.5 ${bankForm.accountType === 'Savings'
                               ? 'bg-[#167a46] border-[#167a46] text-white shadow-xs'
                               : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
@@ -718,8 +766,8 @@ export default function SettingsPage() {
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-200">
                     <button
                       type="button"
-                      onClick={() => refetchBankDetails()}
-                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs transition-all flex items-center justify-center space-x-1.5"
+                      onClick={handleDiscardBankChanges}
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer shadow-xs active:scale-95"
                     >
                       <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
                       <span>Discard Changes</span>

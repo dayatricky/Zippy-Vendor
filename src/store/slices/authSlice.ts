@@ -48,22 +48,55 @@ const saveAuthToStorage = (accessToken: string, refreshToken: string | null, ven
 export const signupVendorThunk = createAsyncThunk(
   'auth/signupVendor',
   async (
-    payload: { fullName: string; email: string; phoneNumber: string; password?: string },
+    payload: { fullName: string; email: string; phoneNumber?: string; password?: string; isEmailChange?: boolean },
     { rejectWithValue }
   ) => {
     try {
-      const response = await apiClient.post('/vendor/auth/signup', {
+      const body: any = {
         email: payload.email,
         password: payload.password || 'Use-a-strong-password-123!',
         fullName: payload.fullName,
-        phoneNumber: payload.phoneNumber,
         deviceId: 'vendor-device-123',
         platform: 'web',
-      });
+      };
+
+      if (payload.phoneNumber) {
+        body.phoneNumber = payload.phoneNumber;
+      }
+
+      let response: any;
+      try {
+        response = await apiClient.post('/vendor/auth/signup', body);
+      } catch (initialErr: any) {
+        const initMsg = String(
+          initialErr.response?.data?.msg ||
+          initialErr.response?.data?.message ||
+          initialErr.message ||
+          ''
+        ).toLowerCase();
+
+        // If phone number already exists from a previous registration attempt or conflict,
+        // retry signup without phoneNumber so that OTP is sent to the updated email address.
+        if (body.phoneNumber && (initMsg.includes('already exists') || initialErr.response?.status === 400)) {
+          delete body.phoneNumber;
+          response = await apiClient.post('/vendor/auth/signup', body);
+        } else {
+          throw initialErr;
+        }
+      }
+
       if (response.data?.error) {
         return rejectWithValue(response.data?.msg || response.data?.message || 'Signup failed');
       }
-      return { email: payload.email, message: response.data?.msg || response.data?.message || 'OTP sent to email successfully!' };
+
+      if (payload.phoneNumber && typeof window !== 'undefined') {
+        localStorage.setItem('zippy_vendor_phone', payload.phoneNumber);
+      }
+
+      return {
+        email: payload.email,
+        message: response.data?.msg || response.data?.message || 'OTP sent to email successfully!',
+      };
     } catch (err: any) {
       const errMsg = err.response?.data?.msg || err.response?.data?.message || err.message || 'Signup failed';
       return rejectWithValue(errMsg);
@@ -117,11 +150,12 @@ export const verifyOtpThunk = createAsyncThunk(
         return rejectWithValue('Access token missing in response');
       }
 
+      const storedPhone = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_phone') || '' : '';
       const vendorUser: VendorUser = {
         id: rawVendor?.id || `v-usr-${Date.now()}`,
         name: rawVendor?.fullName || rawVendor?.name || 'Vendor Partner',
         email: rawVendor?.email || payload.email,
-        phone: rawVendor?.phoneNumber || rawVendor?.phone || '',
+        phone: rawVendor?.phoneNumber || rawVendor?.phone || storedPhone,
         role: 'VENDOR',
       };
 
@@ -188,11 +222,12 @@ export const loginVendorThunk = createAsyncThunk(
         return rejectWithValue('Access token missing in response');
       }
 
+      const storedPhone = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_phone') || '' : '';
       const vendorUser: VendorUser = {
         id: rawVendor?.id || 'v-usr-101',
         name: rawVendor?.fullName || rawVendor?.name || 'Vendor Partner',
         email: rawVendor?.email || credentials.email,
-        phone: rawVendor?.phoneNumber || rawVendor?.phone || '',
+        phone: rawVendor?.phoneNumber || rawVendor?.phone || storedPhone,
         role: 'VENDOR',
       };
 
@@ -280,6 +315,7 @@ export const logoutVendorThunk = createAsyncThunk(
         localStorage.removeItem('zippy_vendor_user');
         localStorage.removeItem('zippy_store_status');
         localStorage.removeItem('zippy_store_name');
+        localStorage.removeItem('zippy_vendor_phone');
       }
     }
     return true;

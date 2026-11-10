@@ -404,6 +404,7 @@ export const vendorApi = createApi({
         unit?: string;
         pack_size?: string;
         mrp?: number;
+        selling_price?: number;
         price?: number;
         stock?: number;
         stock_quantity?: number;
@@ -412,36 +413,48 @@ export const vendorApi = createApi({
       }
     >({
       query: (rawBody) => {
-        const { ...cleanBody } = rawBody as any;
+        const { price, stock, ...cleanBody } = rawBody as any;
         const generatedSlug = cleanBody.slug || cleanBody.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-        const imagesPayload = cleanBody.images && cleanBody.images.length > 0
-          ? cleanBody.images
-          : cleanBody.image
-            ? [{ image_url: cleanBody.image, display_order: 0, is_primary: true }]
-            : [];
+        
+        // Exact 1:1 Swagger structure for images: Array<{ image_url, display_order, is_primary }>
+        const defaultPlaceholder = 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80';
+        const imagesPayload = Array.isArray(cleanBody.images) && cleanBody.images.length > 0
+          ? cleanBody.images.map((img: any, idx: number) => ({
+              image_url: String(img.image_url || img.url || img.path || defaultPlaceholder),
+              display_order: Number(img.display_order ?? idx),
+              is_primary: Boolean(img.is_primary ?? idx === 0),
+            }))
+          : [
+              {
+                image_url: cleanBody.image ? String(cleanBody.image) : defaultPlaceholder,
+                display_order: 0,
+                is_primary: true,
+              },
+            ];
 
-        const finalSellingPrice = Number(cleanBody.price ?? cleanBody.mrp ?? 0);
-        const finalMrpPrice = Number(cleanBody.mrp ?? cleanBody.price ?? 0);
-        const finalStock = Number(cleanBody.stock_quantity ?? cleanBody.stock ?? 25);
+        // Backend accepts mrp (e.g. 100) and selling_price (e.g. 90)
+        const effectiveSellingPrice = Number(cleanBody.selling_price ?? price ?? cleanBody.price ?? cleanBody.mrp ?? 0);
+        const effectiveMrp = Number(cleanBody.mrp ?? effectiveSellingPrice);
+        const finalStock = Number(cleanBody.stock_quantity ?? stock ?? 100);
 
         return {
           url: '/vendor/products',
           method: 'POST',
           body: {
-            category_id: cleanBody.category_id,
-            name: cleanBody.name,
+            category_id: String(cleanBody.category_id),
+            name: String(cleanBody.name),
             slug: generatedSlug,
-            description: cleanBody.description || cleanBody.name,
-            brand_name: cleanBody.brand_name || 'Generic',
-            sku: cleanBody.sku || `SKU-${Date.now()}`,
-            barcode: cleanBody.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
-            unit: cleanBody.unit || '1 kg',
-            pack_size: cleanBody.pack_size || cleanBody.unit || '1 kg',
-            price: finalSellingPrice,
-            mrp: finalMrpPrice,
+            description: String(cleanBody.description || cleanBody.name),
+            brand_name: String(cleanBody.brand_name || 'Generic'),
+            sku: String(cleanBody.sku || `SKU-${Date.now()}`),
+            barcode: String(cleanBody.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`),
+            unit: String(cleanBody.unit || '1 kg'),
+            pack_size: String(cleanBody.pack_size || cleanBody.unit || '1 kg'),
+            mrp: effectiveMrp,
+            selling_price: effectiveSellingPrice,
             stock_quantity: finalStock,
             images: imagesPayload,
-            status: cleanBody.status || 'PENDING',
+            status: cleanBody.status || 'ACTIVE',
           },
         };
       },
@@ -462,6 +475,7 @@ export const vendorApi = createApi({
         unit?: string;
         pack_size?: string;
         mrp?: number;
+        selling_price?: number;
         price?: number;
         stock?: number;
         stock_quantity?: number;
@@ -469,18 +483,22 @@ export const vendorApi = createApi({
         status?: 'ACTIVE' | 'INACTIVE' | 'PENDING' | string;
       }
     >({
-      query: ({ id, price, stock, ...body }) => ({
-        url: `/vendor/products/${id}`,
-        method: 'PATCH',
-        body: {
-          ...body,
-          ...(price !== undefined ? { price: Number(price) } : {}),
-          ...(body.mrp !== undefined ? { mrp: Number(body.mrp) } : {}),
-          ...(stock !== undefined || body.stock_quantity !== undefined
-            ? { stock_quantity: Number(body.stock_quantity ?? stock) }
-            : {}),
-        },
-      }),
+      query: ({ id, price, stock, ...body }) => {
+        const effectiveMrp = body.mrp !== undefined ? Number(body.mrp) : undefined;
+        const effectiveSellingPrice = body.selling_price !== undefined ? Number(body.selling_price) : price !== undefined ? Number(price) : undefined;
+        const stockQty = body.stock_quantity !== undefined ? Number(body.stock_quantity) : stock !== undefined ? Number(stock) : undefined;
+
+        return {
+          url: `/vendor/products/${id}`,
+          method: 'PATCH',
+          body: {
+            ...body,
+            ...(effectiveMrp !== undefined ? { mrp: effectiveMrp } : {}),
+            ...(effectiveSellingPrice !== undefined ? { selling_price: effectiveSellingPrice } : {}),
+            ...(stockQty !== undefined ? { stock_quantity: stockQty } : {}),
+          },
+        };
+      },
       invalidatesTags: ['Products'],
     }),
 

@@ -29,10 +29,46 @@ import {
   Search,
   ExternalLink,
   LocateFixed,
+  Edit3,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import { useAppSelector } from '@/store';
 import { useSubmitStoreRequestMutation, useGetStoreRequestQuery } from '@/store/api/vendorApi';
+
+// Robust helper to extract clear, human-readable error messages from NestJS / Zippy API
+const extractErrorMessage = (err: any): string => {
+  if (!err) return 'Something went wrong. Please try again.';
+  if (typeof err === 'string') return err;
+
+  const data = err?.data || err?.response?.data;
+  if (data) {
+    if (typeof data.msg === 'string' && data.msg.trim()) {
+      return data.msg.trim();
+    }
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return data.message.trim();
+    }
+    if (Array.isArray(data.message) && data.message.length > 0) {
+      return data.message
+        .map((m: any) => (typeof m === 'string' ? m : m?.message || JSON.stringify(m)))
+        .join(', ');
+    }
+    if (Array.isArray(data.msg) && data.msg.length > 0) {
+      return data.msg
+        .map((m: any) => (typeof m === 'string' ? m : m?.message || JSON.stringify(m)))
+        .join(', ');
+    }
+    if (typeof data.error === 'string' && data.error.trim() && data.error !== 'Bad Request') {
+      return data.error.trim();
+    }
+  }
+
+  if (typeof err?.message === 'string' && err.message.trim()) {
+    return err.message.trim();
+  }
+
+  return 'Store registration submission failed on server. Please check your inputs and try again.';
+};
 
 export default function StoreRequestPage() {
   const router = useRouter();
@@ -56,6 +92,7 @@ export default function StoreRequestPage() {
 
   const [activeStep, setActiveStep] = useState<1 | 2 | 3 | 4>(1);
   const [submissionSuccess, setSubmissionSuccess] = useState(false);
+  const [isEditingRejected, setIsEditingRejected] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLocating, setIsLocating] = useState(false);
   const [locationDetected, setLocationDetected] = useState(false);
@@ -96,7 +133,11 @@ export default function StoreRequestPage() {
     storeCategory: requestObj?.storeCategory || '',
     description: requestObj?.description || '',
     ownerName: requestObj?.ownerName || activeUser?.name || '',
-    contactNumber: requestObj?.contactNumber || activeUser?.phone || '',
+    contactNumber:
+      requestObj?.contactNumber ||
+      activeUser?.phone ||
+      (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_phone') || '' : '') ||
+      '',
     alternateNumber: requestObj?.alternateNumber || '',
     email: requestObj?.email || activeUser?.email || '',
     storeLogo: requestObj?.storeLogo || '',
@@ -137,7 +178,12 @@ export default function StoreRequestPage() {
         ...prev,
         // Only pre-populate empty fields with authenticated user account data or existing request data
         ownerName: prev.ownerName || requestObj?.ownerName || activeUser?.name || '',
-        contactNumber: prev.contactNumber || requestObj?.contactNumber || activeUser?.phone || '',
+        contactNumber:
+          prev.contactNumber ||
+          requestObj?.contactNumber ||
+          activeUser?.phone ||
+          (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_phone') || '' : '') ||
+          '',
         email: prev.email || requestObj?.email || activeUser?.email || '',
         accountHolderName: prev.accountHolderName || requestObj?.bankDetails?.accountHolderName || activeUser?.name || '',
 
@@ -398,6 +444,9 @@ export default function StoreRequestPage() {
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
+    if (errorMessage) {
+      setErrorMessage('');
+    }
     const { name, value } = e.target;
     if (name === 'contactNumber' || name === 'alternateNumber') {
       let digits = value.replace(/\D/g, '');
@@ -587,16 +636,16 @@ export default function StoreRequestPage() {
       }
 
       setSubmissionSuccess(true);
+      setIsEditingRejected(false);
       setErrorMessage('');
     } catch (err: any) {
       console.error('Store Registration API Failure:', err);
-      const msg =
-        err?.data?.message ||
-        err?.data?.error ||
-        err?.message ||
-        'Store registration request failed on server. Please check your network or inputs.';
+      const msg = extractErrorMessage(err);
       setErrorMessage(msg);
       setSubmissionSuccess(false);
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   };
 
@@ -622,7 +671,7 @@ export default function StoreRequestPage() {
               : isPending
               ? 'Application Under Review ⏳'
               : isRejected
-              ? 'Application Action Required ⚠️'
+              ? (isEditingRejected ? 'Update & Re-submit Application ✍️' : 'Application Action Required ⚠️')
               : 'Register Your Store Account 🚀'}
           </h1>
           <p className="text-emerald-100 text-xs md:text-sm leading-relaxed">
@@ -631,7 +680,7 @@ export default function StoreRequestPage() {
               : isPending
               ? 'Your application details have been received and are currently under verification.'
               : isRejected
-              ? 'Your store application requires update. Please review rejection feedback below.'
+              ? (isEditingRejected ? 'Modify the required details below and re-submit your application for official verification.' : 'Your store application requires update. Please review rejection feedback below.')
               : 'Fill out the official 4-step onboarding application to receive live grocery orders.'}
           </p>
         </div>
@@ -861,14 +910,14 @@ export default function StoreRequestPage() {
             </Link>
           </div>
         </div>
-      ) : isRejected ? (
+      ) : isRejected && !isEditingRejected ? (
         /* REJECTED OVERLAY CARD */
-        <div className="white-card p-8 md:p-12 max-w-3xl mx-auto space-y-6 border-2 border-rose-400 shadow-2xl text-center">
+        <div className="white-card p-8 md:p-12 max-w-3xl mx-auto space-y-6 border-2 border-rose-400 shadow-2xl text-center animate-in zoom-in-95">
           <div className="w-20 h-20 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto shadow-lg border-2 border-rose-300">
             <AlertTriangle className="w-10 h-10" />
           </div>
           <div className="space-y-2">
-            <span className="px-3 py-1 rounded-full bg-rose-100 text-rose-900 text-xs font-black uppercase">
+            <span className="px-3 py-1 rounded-full bg-rose-100 text-rose-900 text-xs font-black uppercase tracking-wider">
               APPLICATION REJECTED
             </span>
             <h2 className="text-2xl md:text-3xl font-black text-slate-900">Registration Needs Updates</h2>
@@ -877,14 +926,20 @@ export default function StoreRequestPage() {
             </p>
           </div>
           <button
-            onClick={() => setActiveStep(1)}
-            className="px-6 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-md"
+            type="button"
+            onClick={() => {
+              setIsEditingRejected(true);
+              setActiveStep(1);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="px-8 py-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center space-x-2 mx-auto"
           >
-            Edit & Re-submit Application
+            <Edit3 className="w-4 h-4" />
+            <span>Edit & Re-submit Application</span>
           </button>
         </div>
       ) : (
-        /* STEP WIZARD CONTAINER (For NOT_REGISTERED) */
+        /* STEP WIZARD CONTAINER (For NOT_REGISTERED or REJECTED when editing) */
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
           {/* LEFT SIDEBAR: STEP PROGRESS WIZARD */}
           <div className="lg:col-span-1 space-y-3">
@@ -943,8 +998,32 @@ export default function StoreRequestPage() {
             </div>
           </div>
 
-          {/* RIGHT SIDE: SEXY MULTI-STEP FORM CARD */}
-          <div className="lg:col-span-3">
+          {/* RIGHT SIDE: MULTI-STEP FORM CARD */}
+          <div className="lg:col-span-3 space-y-4">
+            {isRejected && isEditingRejected && (
+              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-300 text-rose-950 text-xs flex items-start justify-between gap-3 shadow-xs animate-in fade-in-50">
+                <div className="flex items-start space-x-3">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-rose-950">Editing Application (Previously Rejected)</p>
+                    <p className="text-rose-800 mt-1">
+                      Rejection Reason: <strong>{requestObj?.rejectionReason || 'Please review your documents and information, update them, and re-submit.'}</strong>
+                    </p>
+                    <p className="text-rose-600 text-[11px] mt-1">
+                      Update any incorrect details and navigate through all 4 steps to re-submit your application for approval.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingRejected(false)}
+                  className="text-xs font-bold text-rose-700 hover:text-rose-900 underline shrink-0 cursor-pointer"
+                >
+                  View Rejection Notice
+                </button>
+              </div>
+            )}
+
             <div className="white-card p-6 md:p-8 space-y-6 shadow-md border-t-4 border-t-[#167a46]">
               {/* Form Title */}
               <div className="flex items-center justify-between border-b border-slate-200 pb-4">
@@ -960,9 +1039,12 @@ export default function StoreRequestPage() {
               </div>
 
               {errorMessage && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center space-x-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{errorMessage}</span>
+                <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-start space-x-2.5 animate-in fade-in-50">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-black text-rose-900">Submission Error</p>
+                    <p className="font-semibold text-rose-700 mt-0.5 leading-relaxed">{String(errorMessage)}</p>
+                  </div>
                 </div>
               )}
 
@@ -1532,47 +1614,6 @@ export default function StoreRequestPage() {
                         <option value="LLP">Limited Liability Partnership (LLP)</option>
                       </select>
                     </div>
-
-                    {/* File Upload Placeholders */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-200 pt-4">
-                      <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300 flex items-center space-x-3">
-                        <Upload className="w-6 h-6 text-[#167a46] shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-slate-800">FSSAI Certificate PDF</p>
-                          <p className="text-[11px] text-slate-500 font-medium truncate">
-                            {formData.fssaiDocName ? formData.fssaiDocName : 'No file attached (Optional / On verification)'}
-                          </p>
-                        </div>
-                        {formData.fssaiDocName ? (
-                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
-                            Attached
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded-md">
-                            Optional
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="p-4 rounded-2xl bg-slate-50 border border-dashed border-slate-300 flex items-center space-x-3">
-                        <Upload className="w-6 h-6 text-[#167a46] shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-slate-800">GST Registration PDF</p>
-                          <p className="text-[11px] text-slate-500 font-medium truncate">
-                            {formData.gstDocName ? formData.gstDocName : 'No file attached (Optional / On verification)'}
-                          </p>
-                        </div>
-                        {formData.gstDocName ? (
-                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-1 rounded-md">
-                            Attached
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-1 rounded-md">
-                            Optional
-                          </span>
-                        )}
-                      </div>
-                    </div>
                   </div>
                 )}
 
@@ -1697,6 +1738,17 @@ export default function StoreRequestPage() {
                   </div>
                 )}
 
+                {/* Prominent bottom error message if submission or validation failed */}
+                {errorMessage && (
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-start space-x-2.5 animate-in fade-in-50">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-black text-rose-900">Submission Error</p>
+                      <p className="font-semibold text-rose-700 mt-0.5 leading-relaxed">{String(errorMessage)}</p>
+                    </div>
+                  </div>
+                )}
+
                 {/* FORM WIZARD FOOTER NAVIGATION BUTTONS */}
                 <div className="border-t border-slate-200 pt-5 flex items-center justify-between">
                   {activeStep > 1 ? (
@@ -1727,7 +1779,13 @@ export default function StoreRequestPage() {
                       disabled={isSubmittingApi}
                       className="px-8 py-3.5 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white font-black text-sm shadow-xl flex items-center space-x-2 transition-all active:scale-[0.99]"
                     >
-                      <span>{isSubmittingApi ? 'Submitting Application...' : 'Submit Store Request for Approval'}</span>
+                      <span>
+                        {isSubmittingApi
+                          ? 'Submitting Application...'
+                          : isRejected
+                          ? 'Re-submit Store Request for Approval'
+                          : 'Submit Store Request for Approval'}
+                      </span>
                       <Sparkles className="w-4 h-4 text-emerald-300" />
                     </button>
                   )}

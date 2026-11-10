@@ -16,6 +16,7 @@ export default function RegisterPage() {
   const { registerUserAccount } = useVendorStore();
 
   const [step, setStep] = useState<'SIGNUP' | 'VERIFY_OTP'>('SIGNUP');
+  const [isEmailChange, setIsEmailChange] = useState(false);
 
   // Form States
   const [formData, setFormData] = useState({
@@ -156,11 +157,17 @@ export default function RegisterPage() {
           email: formData.email.trim().toLowerCase(),
           phoneNumber: cleanPhone,
           password: formData.password,
+          isEmailChange,
         })
       ).unwrap();
 
       registerUserAccount(formData.fullName.trim(), formData.email.trim().toLowerCase(), cleanPhone);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('zippy_vendor_phone', cleanPhone);
+      }
+      setIsEmailChange(false);
       setStep('VERIFY_OTP');
+      setOtp('');
       setResendTimer(30);
       setStatusMessage(`OTP sent to ${formData.email.trim().toLowerCase()}!`);
     } catch (err: any) {
@@ -183,8 +190,8 @@ export default function RegisterPage() {
     setErrorMessage('');
 
     try {
-      await dispatch(sendOtpThunk(formData.email)).unwrap();
-      setStatusMessage(`New OTP resent to ${formData.email}!`);
+      await dispatch(sendOtpThunk(formData.email.trim().toLowerCase())).unwrap();
+      setStatusMessage(`New OTP resent to ${formData.email.trim().toLowerCase()}!`);
       setResendTimer(30);
       setCanResend(false);
     } catch (err: any) {
@@ -501,7 +508,14 @@ export default function RegisterPage() {
               <div className="pt-2 text-center text-xs text-slate-500">
                 <button
                   type="button"
-                  onClick={() => setStep('SIGNUP')}
+                  onClick={() => {
+                    setStep('SIGNUP');
+                    setIsEmailChange(true);
+                    setErrorMessage('');
+                    setStatusMessage('Enter your updated email address and submit.');
+                    recaptchaRef.current?.reset();
+                    setCaptchaToken(null);
+                  }}
                   className="font-bold text-[#167a46] underline hover:text-emerald-800"
                 >
                   ← Change Email Address

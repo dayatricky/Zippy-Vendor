@@ -348,8 +348,8 @@ export default function ProductsPage() {
         return {
           id: String(p.id || p._id || `p-${idx}`),
           name: p.name || 'Product',
-          price: p.price || p.mrp || 0,
-          mrp: p.mrp || p.price || 0,
+          price: p.selling_price ?? p.price ?? p.mrp ?? 0,
+          mrp: p.mrp ?? p.selling_price ?? p.price ?? 0,
           image: resolveImageUrl(imageUrl),
           rawImageUrl: imageUrl,
           primaryImageId: primaryImageId,
@@ -661,8 +661,7 @@ export default function ProductsPage() {
           name: newProduct.name.trim(),
           slug: newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
           mrp: mrpNum,
-          price: priceNum,
-          stock: stockNum,
+          selling_price: priceNum,
           stock_quantity: stockNum,
           unit: newProduct.unit,
           pack_size: newProduct.unit,
@@ -872,14 +871,14 @@ export default function ProductsPage() {
         category_id: category_id,
         name: newProduct.name.trim(),
         slug: newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        price: priceNum,
         mrp: mrpNum,
+        selling_price: priceNum,
         unit: newProduct.unit || '1 kg',
         pack_size: newProduct.unit || '1 kg',
         stock_quantity: stockNum,
         images: initialImages,
-        status: 'PENDING',
-      } as any).unwrap();
+        status: 'ACTIVE',
+      }).unwrap();
 
       createdProductId = createRes?.data?.id || createRes?.data?._id || (createRes as any)?.id || (createRes as any)?.productId || '';
 
