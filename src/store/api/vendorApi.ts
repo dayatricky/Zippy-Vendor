@@ -1,4 +1,5 @@
 import { createApi, fetchBaseQuery, BaseQueryFn, FetchArgs, FetchBaseQueryError } from '@reduxjs/toolkit/query/react';
+import toast from 'react-hot-toast';
 import { VendorProfile, CategoryItem, Product, Order, PayoutRequest } from '../useVendorStore';
 
 const rawBaseUrl = (process.env.NEXT_PUBLIC_API_URL || 'https://zippy-api.elyriasoft.com/api/v1').replace(/\/+$/, '');
@@ -156,11 +157,14 @@ const notifySessionExpired = (message: string) => {
     const pathname = window.location.pathname;
     if (!pathname.startsWith('/login') && !pathname.startsWith('/register')) {
       sessionStorage.setItem('zippy_auth_message', message);
-      window.dispatchEvent(
-        new CustomEvent('zippy_session_expired', {
-          detail: { message },
-        })
-      );
+      toast.error('Session expired. Please log in again to continue.', {
+        id: 'session-expired-toast',
+        duration: 4000,
+        icon: '🔒',
+      });
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 1500);
     }
   }
 };

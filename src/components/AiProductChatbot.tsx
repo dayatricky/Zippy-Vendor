@@ -27,9 +27,9 @@ import {
   Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useGetCategoriesQuery } from '@/store/api/vendorApi';
+import { useGetCategoriesQuery, API_BASE_URL } from '@/store/api/vendorApi';
 import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorder';
-import { resolveImageUrl } from '@/utils/imageUrl';
+import { resolveImageUrl, getAccurateProductImage } from '@/utils/imageUrl';
 
 const isUUID = (str?: string) =>
   Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
@@ -541,6 +541,7 @@ export default function AiProductChatbot({
 
           return {
             ...p,
+            image_url: getAccurateProductImage(p.name, matchedCategory?.name || p.category_name, p.image_url),
             price,
             mrp,
             price_range: priceRange,
@@ -733,6 +734,74 @@ export default function AiProductChatbot({
     } catch (err: any) {
       console.error('Failed to add product:', err);
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
+      const status = err?.status || err?.originalStatus;
+      const isTokenExpired =
+        status === 401 ||
+        String(errMsg).toLowerCase().includes('token has expired') ||
+        String(errMsg).toLowerCase().includes('token expired') ||
+        String(errMsg).toLowerCase().includes('jwt expired') ||
+        String(errMsg).toLowerCase().includes('unauthorized') ||
+        String(errMsg).toLowerCase().includes('invalid token');
+
+      if (isTokenExpired) {
+        // 1. Try refreshing token automatically
+        const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_refresh_token') : null;
+        if (refreshToken) {
+          try {
+            const refreshRes = await fetch(`${API_BASE_URL}/vendor/auth/refresh-token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ refreshToken }),
+            });
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              const newAccessToken =
+                refreshData?.data?.accessToken ||
+                refreshData?.accessToken ||
+                refreshData?.data?.token ||
+                refreshData?.token;
+              const newRefreshToken = refreshData?.data?.refreshToken || refreshData?.refreshToken;
+
+              if (newAccessToken) {
+                localStorage.setItem('zippy_vendor_token', newAccessToken);
+                if (newRefreshToken) {
+                  localStorage.setItem('zippy_vendor_refresh_token', newRefreshToken);
+                }
+                // Retry adding the product!
+                await onAddProduct(payload);
+                setMessages((prev) =>
+                  prev.map((msg) => {
+                    if (msg.id !== msgId || !msg.products) return msg;
+                    const updatedProds = [...msg.products];
+                    updatedProds[prodIndex] = { ...updatedProds[prodIndex], isAdded: true, selected: false };
+                    return { ...msg, products: updatedProds };
+                  })
+                );
+                if (onCatalogRefresh) onCatalogRefresh();
+                toast.success(`Product "${product.name}" added successfully! 🎉`);
+                return;
+              }
+            }
+          } catch (rErr) {
+            console.warn('Auto refresh failed in copilot:', rErr);
+          }
+        }
+
+        // 2. Clear expired session and prompt vendor to log in again
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('zippy_vendor_token');
+          localStorage.removeItem('zippy_vendor_refresh_token');
+        }
+        toast.error('Session expired. Please log in again to continue.', {
+          duration: 4000,
+          icon: '🔒',
+        });
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 1500);
+        return;
+      }
+
       if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
         toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
           duration: 5000,
@@ -814,6 +883,24 @@ export default function AiProductChatbot({
       } catch (err: any) {
         console.error(`Failed to add ${p.name}:`, err);
         const errMsg = err?.data?.msg || err?.data?.message || err?.message || '';
+        const status = err?.status || err?.originalStatus;
+        const isTokenExpired =
+          status === 401 ||
+          String(errMsg).toLowerCase().includes('token has expired') ||
+          String(errMsg).toLowerCase().includes('token expired') ||
+          String(errMsg).toLowerCase().includes('unauthorized');
+
+        if (isTokenExpired) {
+          setBatchAdding(false);
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('zippy_vendor_token');
+            localStorage.removeItem('zippy_vendor_refresh_token');
+          }
+          toast.error('Session expired. Please log in again to continue.', { duration: 4000, icon: '🔒' });
+          setTimeout(() => { window.location.href = '/login'; }, 1500);
+          return;
+        }
+
         if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
           successCount++;
         } else {
@@ -1033,7 +1120,7 @@ export default function AiProductChatbot({
                               {/* Product Image Preview */}
                               <div className="w-16 h-16 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0 relative">
                                 <img
-                                  src={resolveImageUrl(prod.image_url)}
+                                  src={resolveImageUrl(getAccurateProductImage(prod.name, prod.category_name, prod.image_url))}
                                   alt={prod.name}
                                   className="w-full h-full object-cover"
                                   onError={(e: any) => {

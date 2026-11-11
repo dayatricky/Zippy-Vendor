@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { callMcpProductTool, callMcpUpdateProductTool, getMcpUrl, McpProductResult } from '@/services/mcpClient';
+import { getAccurateProductImage } from '@/utils/imageUrl';
 
 interface CategoryItem {
   id?: string;
@@ -80,128 +81,8 @@ function matchStoreCategory(mcpCategory: string, categories: CategoryItem[]): { 
   return { id: categories[0]?.id || '', name: categories[0]?.name || mcpCategory || 'General' };
 }
 
-function getProductImageUrl(name: string, category: string): string {
-  const text = `${name} ${category}`.toLowerCase();
-
-  // Apparel & Clothing
-  if (text.includes('shirt') || text.includes('t-shirt') || text.includes('crewneck') || text.includes('top') || text.includes('polo')) {
-    return 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=500&q=80';
-  }
-  if (text.includes('chino') || text.includes('pant') || text.includes('trouser') || text.includes('jean') || text.includes('bottom')) {
-    return 'https://images.unsplash.com/photo-1473966968600-fa801b869a1a?w=500&q=80';
-  }
-  if (text.includes('windbreaker') || text.includes('jacket') || text.includes('coat') || text.includes('outerwear') || text.includes('blazer')) {
-    return 'https://images.unsplash.com/photo-1544441893-675973e31985?w=500&q=80';
-  }
-  if (text.includes('pullover') || text.includes('sweater') || text.includes('knitwear') || text.includes('hoodie') || text.includes('cardigan')) {
-    return 'https://images.unsplash.com/photo-1556905055-8f358a7a47b2?w=500&q=80';
-  }
-  if (text.includes('shoe') || text.includes('sneaker') || text.includes('footwear') || text.includes('sandal') || text.includes('boot')) {
-    return 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500&q=80';
-  }
-  if (text.includes('dress') || text.includes('skirt') || text.includes('saree') || text.includes('kurti')) {
-    return 'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=500&q=80';
-  }
-  if (text.includes('apparel') || text.includes('cloth') || text.includes('fashion') || text.includes('wear')) {
-    return 'https://images.unsplash.com/photo-1489987707025-afc232f7ea0f?w=500&q=80';
-  }
-
-  // Fruits
-  if (text.includes('apple') || text.includes('gala') || text.includes('honeycrisp')) {
-    return 'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=500&q=80';
-  }
-  if (text.includes('banana') || text.includes('cavendish')) {
-    return 'https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=500&q=80';
-  }
-  if (text.includes('orange') || text.includes('citrus')) {
-    return 'https://images.unsplash.com/photo-1547514701-42782101795e?w=500&q=80';
-  }
-  if (text.includes('mango')) {
-    return 'https://images.unsplash.com/photo-1553279768-865429fa0078?w=500&q=80';
-  }
-  if (text.includes('fruit') || text.includes('berry')) {
-    return 'https://images.unsplash.com/photo-1619566636858-adf3ef46400b?w=500&q=80';
-  }
-
-  // Dairy
-  if (text.includes('milk')) {
-    return 'https://images.unsplash.com/photo-1550583724-b2692b85b150?w=500&q=80';
-  }
-  if (text.includes('paneer') || text.includes('cottage cheese')) {
-    return 'https://images.unsplash.com/photo-1631452180519-c014fe946bc7?w=500&q=80';
-  }
-  if (text.includes('butter')) {
-    return 'https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=500&q=80';
-  }
-  if (text.includes('curd') || text.includes('yogurt') || text.includes('dahi')) {
-    return 'https://images.unsplash.com/photo-1571212515416-fef01fc43637?w=500&q=80';
-  }
-  if (text.includes('cheese')) {
-    return 'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?w=500&q=80';
-  }
-
-  // Vegetables
-  if (text.includes('tomato')) {
-    return 'https://images.unsplash.com/photo-1546470427-e26264be0b11?w=500&q=80';
-  }
-  if (text.includes('potato')) {
-    return 'https://images.unsplash.com/photo-1518977676601-b53f82aba655?w=500&q=80';
-  }
-  if (text.includes('onion')) {
-    return 'https://images.unsplash.com/photo-1508747703725-719777637510?w=500&q=80';
-  }
-  if (text.includes('capsicum') || text.includes('pepper')) {
-    return 'https://images.unsplash.com/photo-1563565375-f3fdfdbefa83?w=500&q=80';
-  }
-  if (text.includes('vegetable') || text.includes('produce')) {
-    return 'https://images.unsplash.com/photo-1540420773420-3366772f4999?w=500&q=80';
-  }
-
-  // Bakery & Breakfast
-  if (text.includes('bread')) {
-    return 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=500&q=80';
-  }
-  if (text.includes('egg')) {
-    return 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=500&q=80';
-  }
-  if (text.includes('bun') || text.includes('pav')) {
-    return 'https://images.unsplash.com/photo-1586190848861-99aa4a171e90?w=500&q=80';
-  }
-
-  // Drinks
-  if (text.includes('coke') || text.includes('cola') || text.includes('soda')) {
-    return 'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=500&q=80';
-  }
-  if (text.includes('juice')) {
-    return 'https://images.unsplash.com/photo-1613478223719-2ab802602423?w=500&q=80';
-  }
-  if (text.includes('coffee') || text.includes('tea')) {
-    return 'https://images.unsplash.com/photo-1517256064527-09c73fc73e38?w=500&q=80';
-  }
-
-  // Snacks & Staples
-  if (text.includes('chips') || text.includes('snack') || text.includes('namkeen')) {
-    return 'https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=500&q=80';
-  }
-  if (text.includes('noodle') || text.includes('pasta')) {
-    return 'https://images.unsplash.com/photo-1612927601601-6638404737ce?w=500&q=80';
-  }
-  if (text.includes('oil')) {
-    return 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=500&q=80';
-  }
-  if (text.includes('atta') || text.includes('flour') || text.includes('wheat') || text.includes('rice')) {
-    return 'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=500&q=80';
-  }
-
-  // Electronics & Personal Care
-  if (text.includes('phone') || text.includes('mobile') || text.includes('headphone') || text.includes('earbud') || text.includes('electronic') || text.includes('charger')) {
-    return 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&q=80';
-  }
-  if (text.includes('shampoo') || text.includes('soap') || text.includes('cream') || text.includes('lotion') || text.includes('perfume') || text.includes('beauty')) {
-    return 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=500&q=80';
-  }
-
-  return 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&q=80';
+function getProductImageUrl(name: string, category: string, currentUrl?: string): string {
+  return getAccurateProductImage(name, category, currentUrl);
 }
 
 const USD_TO_INR_RATE = 85;
@@ -305,7 +186,7 @@ function applyLocalProductUpdates(
     price: Number(p.price) || 40,
     price_range: p.price_range || `₹${p.price} - ₹${p.mrp}`,
     stock_quantity: Number(p.stock_quantity) || 50,
-    image_url: p.image_url || getProductImageUrl(p.name, p.category_name || ''),
+    image_url: getAccurateProductImage(p.name, p.category_name || '', p.image_url),
     description: p.description || p.name,
     key_features: Array.isArray(p.key_features) ? [...p.key_features] : [],
     sku: p.sku || `SKU-${Date.now()}-${idx}`,
@@ -569,7 +450,7 @@ Apply the requested modifications and return the complete updated product list i
             const { price, mrp, formattedPriceRange } = parseAndConvertPriceRange(item.price_range);
             const { unit, packSize } = parsePackSize(`${item.product_name} ${item.price_range || ''}`);
             const brand = extractBrand(item.product_name);
-            const imageUrl = item.image_url || getProductImageUrl(item.product_name, item.category || '');
+            const imageUrl = getAccurateProductImage(item.product_name, item.category || '', item.image_url);
             const slug = item.product_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 
             return {
@@ -636,7 +517,7 @@ Apply the requested modifications and return the complete updated product list i
       const { price, mrp, formattedPriceRange } = parseAndConvertPriceRange(item.price_range);
       const { unit, packSize } = parsePackSize(`${item.product_name} ${item.price_range || ''}`);
       const brand = extractBrand(item.product_name);
-      const imageUrl = item.image_url || getProductImageUrl(item.product_name, item.category || '');
+      const imageUrl = getAccurateProductImage(item.product_name, item.category || '', item.image_url);
       const slug = item.product_name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
