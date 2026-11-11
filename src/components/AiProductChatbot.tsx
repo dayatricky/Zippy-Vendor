@@ -94,6 +94,7 @@ interface AiProductChatbotProps {
   isOpen: boolean;
   onClose: () => void;
   categoriesList: Array<{ id: string; name: string }>;
+  existingProducts?: any[];
   onAddProduct: (payload: any) => Promise<any>;
   onOpenManualModal?: (product: Partial<AiSuggestedProduct>) => void;
   onCatalogRefresh?: () => void;
@@ -114,6 +115,7 @@ export default function AiProductChatbot({
   isOpen,
   onClose,
   categoriesList,
+  existingProducts = [],
   onAddProduct,
   onOpenManualModal,
   onCatalogRefresh,
@@ -686,8 +688,36 @@ export default function AiProductChatbot({
       status: 'ACTIVE',
     };
 
+    // Check if product already exists in vendor's catalog
+    const isAlreadyCreated = Boolean(
+      product.isAdded ||
+      existingProducts.some(
+        (ep: any) =>
+          (product.id && ep.id === product.id) ||
+          (ep.name && ep.name.trim().toLowerCase() === product.name?.trim().toLowerCase()) ||
+          (product.slug && ep.slug && ep.slug.trim().toLowerCase() === product.slug?.trim().toLowerCase())
+      )
+    );
+
+    if (isAlreadyCreated) {
+      toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+        duration: 5000,
+        icon: 'ℹ️',
+      });
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (msg.id !== msgId || !msg.products) return msg;
+          const updatedProds = [...msg.products];
+          updatedProds[prodIndex] = { ...updatedProds[prodIndex], isAdded: true, selected: false };
+          return { ...msg, products: updatedProds };
+        })
+      );
+      setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
+      return;
+    }
+
     try {
-      await onAddProduct(payload);
+      const res = await onAddProduct(payload);
 
       // Mark as added in UI
       setMessages((prev) =>
@@ -704,7 +734,10 @@ export default function AiProductChatbot({
       console.error('Failed to add product:', err);
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
       if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
-        toast.success(`Product "${product.name}" verified and updated in catalog! ✏️`);
+        toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+          duration: 5000,
+          icon: 'ℹ️',
+        });
         setMessages((prev) =>
           prev.map((msg) => {
             if (msg.id !== msgId || !msg.products) return msg;
@@ -964,12 +997,21 @@ export default function AiProductChatbot({
                       {msg.products.map((prod, pIdx) => {
                         const itemKey = `${msg.id}-${pIdx}`;
                         const isAdding = addingIds[itemKey];
+                        const isProdInCatalog = Boolean(
+                          prod.isAdded ||
+                          existingProducts.some(
+                            (ep: any) =>
+                              (prod.id && ep.id === prod.id) ||
+                              (ep.name && ep.name.trim().toLowerCase() === prod.name?.trim().toLowerCase()) ||
+                              (prod.slug && ep.slug && ep.slug.trim().toLowerCase() === prod.slug?.trim().toLowerCase())
+                          )
+                        );
 
                         return (
                           <div
                             key={pIdx}
                             className={`p-3 rounded-xl border transition-all ${
-                              prod.isAdded
+                              isProdInCatalog
                                 ? 'bg-emerald-50/50 border-emerald-200'
                                 : prod.selected
                                 ? 'bg-white border-emerald-400 shadow-xs'
@@ -981,8 +1023,8 @@ export default function AiProductChatbot({
                               <div className="pt-2">
                                 <input
                                   type="checkbox"
-                                  disabled={prod.isAdded}
-                                  checked={prod.selected || prod.isAdded}
+                                  disabled={isProdInCatalog}
+                                  checked={prod.selected || isProdInCatalog}
                                   onChange={() => handleToggleSelect(msg.id, pIdx)}
                                   className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 border-slate-300 disabled:opacity-50"
                                 />
@@ -999,7 +1041,7 @@ export default function AiProductChatbot({
                                       'https://images.unsplash.com/photo-1542838132-92c53300491e?w=200&q=80';
                                   }}
                                 />
-                                {prod.isAdded && (
+                                {isProdInCatalog && (
                                   <div className="absolute inset-0 bg-emerald-600/80 backdrop-blur-2xs flex items-center justify-center text-white">
                                     <Check className="w-5 h-5 font-bold" />
                                   </div>
@@ -1012,16 +1054,16 @@ export default function AiProductChatbot({
                                   <input
                                     type="text"
                                     value={prod.name}
-                                    disabled={prod.isAdded}
+                                    disabled={isProdInCatalog}
                                     onChange={(e) =>
                                       handleProductFieldChange(msg.id, pIdx, 'name', e.target.value)
                                     }
-                                    className="font-semibold text-slate-800 text-sm w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-1 -mx-1 py-0.5 outline-hidden"
-                                    title="Click to edit product name"
+                                    className="font-semibold text-slate-800 text-sm w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-1 -mx-1 py-0.5 outline-hidden disabled:opacity-80"
+                                    title={isProdInCatalog ? 'Product already created in catalog. Edit in Product List' : 'Click to edit product name'}
                                   />
-                                  {prod.isAdded ? (
-                                    <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                                      <CheckCircle2 className="w-3.5 h-3.5" /> Added
+                                  {isProdInCatalog ? (
+                                    <span className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full" title="This product is already created in your catalog. Please edit it from Product List.">
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> In Catalog
                                     </span>
                                   ) : prod.price_range ? (
                                     <span className="shrink-0 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
@@ -1056,11 +1098,11 @@ export default function AiProductChatbot({
                                           ? prod.category_id
                                           : activeCategories[0]?.id || ''
                                       }
-                                      disabled={prod.isAdded}
+                                      disabled={isProdInCatalog}
                                       onChange={(e) =>
                                         handleProductFieldChange(msg.id, pIdx, 'category_id', e.target.value)
                                       }
-                                      className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium"
+                                      className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium disabled:opacity-70 disabled:bg-slate-50"
                                     >
                                       {activeCategories.length > 0 ? (
                                         activeCategories.map((cat) => (
@@ -1081,7 +1123,7 @@ export default function AiProductChatbot({
                                     <input
                                       type="number"
                                       value={prod.price}
-                                      disabled={prod.isAdded}
+                                      disabled={isProdInCatalog}
                                       onChange={(e) =>
                                         handleProductFieldChange(
                                           msg.id,
@@ -1090,7 +1132,7 @@ export default function AiProductChatbot({
                                           parseFloat(e.target.value) || 0
                                         )
                                       }
-                                      className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                                      className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden disabled:opacity-70 disabled:bg-slate-50"
                                     />
                                   </div>
 
@@ -1101,7 +1143,7 @@ export default function AiProductChatbot({
                                     <input
                                       type="number"
                                       value={prod.mrp}
-                                      disabled={prod.isAdded}
+                                      disabled={isProdInCatalog}
                                       onChange={(e) =>
                                         handleProductFieldChange(
                                           msg.id,
@@ -1110,7 +1152,7 @@ export default function AiProductChatbot({
                                           parseFloat(e.target.value) || 0
                                         )
                                       }
-                                      className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-slate-600 focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                                      className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-slate-600 focus:ring-1 focus:ring-emerald-500 outline-hidden disabled:opacity-70 disabled:bg-slate-50"
                                     />
                                   </div>
 
@@ -1122,7 +1164,7 @@ export default function AiProductChatbot({
                                       <input
                                         type="number"
                                         value={prod.stock_quantity}
-                                        disabled={prod.isAdded}
+                                        disabled={isProdInCatalog}
                                         onChange={(e) =>
                                           handleProductFieldChange(
                                             msg.id,
@@ -1132,17 +1174,17 @@ export default function AiProductChatbot({
                                           )
                                         }
                                         title="Stock count"
-                                        className="w-1/2 text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium"
+                                        className="w-1/2 text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium disabled:opacity-70 disabled:bg-slate-50"
                                       />
                                       <input
                                         type="text"
                                         value={prod.unit}
-                                        disabled={prod.isAdded}
+                                        disabled={isProdInCatalog}
                                         onChange={(e) =>
                                           handleProductFieldChange(msg.id, pIdx, 'unit', e.target.value)
                                         }
                                         title="Unit/Pack (e.g. 1 kg, 500 ml)"
-                                        className="w-1/2 text-xs bg-white border border-slate-200 rounded px-1 py-1 text-slate-600 focus:ring-1 focus:ring-emerald-500 outline-hidden"
+                                        className="w-1/2 text-xs bg-white border border-slate-200 rounded px-1 py-1 text-slate-600 focus:ring-1 focus:ring-emerald-500 outline-hidden disabled:opacity-70 disabled:bg-slate-50"
                                       />
                                     </div>
                                   </div>
@@ -1153,6 +1195,13 @@ export default function AiProductChatbot({
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      if (isProdInCatalog) {
+                                        toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+                                          duration: 5000,
+                                          icon: 'ℹ️',
+                                        });
+                                        return;
+                                      }
                                       setEditingProductData({
                                         msgId: msg.id,
                                         prodIndex: pIdx,
@@ -1165,8 +1214,12 @@ export default function AiProductChatbot({
                                       });
                                       setAiUpdatePrompt('Update the product description so it looks like a premium product');
                                     }}
-                                    className="text-xs px-2.5 py-1 text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-md font-semibold flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                    title="Edit with AI using live MCP update_product_detail_tool"
+                                    className={`text-xs px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 transition-all ${
+                                      isProdInCatalog
+                                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                        : 'text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-2xs cursor-pointer'
+                                    }`}
+                                    title={isProdInCatalog ? 'Product already created in catalog. You cannot edit it from here. Edit in Product List' : 'Edit with AI using live MCP update_product_detail_tool'}
                                   >
                                     <Sparkles className="w-3.5 h-3.5" />
                                     <span>AI Edit</span>
@@ -1174,7 +1227,14 @@ export default function AiProductChatbot({
 
                                   <button
                                     type="button"
-                                    onClick={() =>
+                                    onClick={() => {
+                                      if (isProdInCatalog) {
+                                        toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+                                          duration: 5000,
+                                          icon: 'ℹ️',
+                                        });
+                                        return;
+                                      }
                                       setEditingProductData({
                                         msgId: msg.id,
                                         prodIndex: pIdx,
@@ -1184,16 +1244,20 @@ export default function AiProductChatbot({
                                         },
                                         newFeatureInput: '',
                                         mode: 'manual',
-                                      })
-                                    }
-                                    className="text-xs px-2.5 py-1 text-slate-700 hover:text-emerald-700 bg-white hover:bg-emerald-50 border border-slate-200 rounded-md font-medium flex items-center gap-1 transition-colors cursor-pointer"
-                                    title="Edit description, key features, image, pricing & stock manually"
+                                      });
+                                    }}
+                                    className={`text-xs px-2.5 py-1 rounded-md font-medium flex items-center gap-1 transition-colors ${
+                                      isProdInCatalog
+                                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                        : 'text-slate-700 hover:text-emerald-700 bg-white hover:bg-emerald-50 border border-slate-200 cursor-pointer'
+                                    }`}
+                                    title={isProdInCatalog ? 'Product already created in catalog. You cannot edit it from here. Edit in Product List' : 'Edit description, key features, image, pricing & stock manually'}
                                   >
                                     <Edit className="w-3.5 h-3.5 text-emerald-600" />
                                     <span>Edit Details</span>
                                   </button>
 
-                                  {onOpenManualModal && !prod.isAdded && (
+                                  {onOpenManualModal && !isProdInCatalog && (
                                     <button
                                       type="button"
                                       onClick={() => onOpenManualModal(prod)}
@@ -1204,7 +1268,22 @@ export default function AiProductChatbot({
                                     </button>
                                   )}
 
-                                  {!prod.isAdded && (
+                                  {isProdInCatalog ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+                                          duration: 5000,
+                                          icon: 'ℹ️',
+                                        });
+                                      }}
+                                      className="text-xs px-2.5 py-1 font-medium rounded-md shadow-2xs flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 cursor-pointer"
+                                      title="Product already created in catalog. You cannot edit it from here. Edit in Product List"
+                                    >
+                                      <Check className="w-3 h-3 text-emerald-600" />
+                                      <span>Already in Catalog</span>
+                                    </button>
+                                  ) : (
                                     <button
                                       type="button"
                                       onClick={() => handleAddSingleProduct(msg.id, pIdx, prod)}

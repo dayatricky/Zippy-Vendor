@@ -932,28 +932,12 @@ export default function ProductsPage() {
       }
 
       if (String(errMsg).toLowerCase().includes('already exists') || status === 409) {
-        try {
-          const uniqueSuffix = `${Date.now().toString().slice(-4)}`;
-          const baseSlug = newProduct.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-          await addProductApi({
-            category_id: category_id,
-            name: newProduct.name.trim(),
-            slug: `${baseSlug}-${uniqueSuffix}`,
-            mrp: mrpNum,
-            unit: newProduct.unit || '1 kg',
-            pack_size: newProduct.unit || '1 kg',
-            stock_quantity: stockNum,
-            images: initialImages,
-            status: 'ACTIVE',
-          }).unwrap();
-          toast.success('Product added successfully! 🎉', { duration: 4000, icon: '✅' });
-          refetchProducts();
-          setIsModalOpen(false);
-          setSelectedImageFile(null);
-          return;
-        } catch (retryErr) {
-          console.error('Retry add product failed:', retryErr);
-        }
+        toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+          duration: 5000,
+          icon: 'ℹ️',
+        });
+        setApprovalError('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.');
+        return;
       }
 
       setApprovalError(errMsg);
@@ -2093,6 +2077,7 @@ export default function ProductsPage() {
         isOpen={isAiAssistantOpen}
         onClose={() => setIsAiAssistantOpen(false)}
         categoriesList={categoriesList}
+        existingProducts={displayProducts}
         isStoreApproved={true}
         onCatalogRefresh={() => refetchProducts()}
         onAddProduct={async (payload) => {
@@ -2118,30 +2103,11 @@ export default function ProductsPage() {
           );
 
           if (existingInStore && existingInStore.id && !existingInStore.id.startsWith('p-') && !existingInStore.id.startsWith('mcp-')) {
-            try {
-              const updateRes = await updateProductApi({
-                id: existingInStore.id,
-                name: payload.name,
-                description: payload.description,
-                mrp: Number(payload.mrp) || existingInStore.mrp,
-                stock_quantity: Number(payload.stock_quantity) || existingInStore.stock,
-                unit: payload.unit || existingInStore.unit,
-                pack_size: payload.pack_size || payload.unit || existingInStore.unit,
-              }).unwrap();
-
-              updateProduct(existingInStore.id, {
-                description: payload.description,
-                mrp: Number(payload.mrp) || existingInStore.mrp,
-                price: Number(payload.mrp) || existingInStore.price,
-                stock: Number(payload.stock_quantity) || existingInStore.stock,
-              });
-
-              toast.success(`Product "${payload.name}" updated with new description! ✏️`);
-              refetchProducts();
-              return updateRes;
-            } catch (updateErr: any) {
-              console.warn('Update existing product failed, falling back to create:', updateErr);
-            }
+            toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+              duration: 5000,
+              icon: 'ℹ️',
+            });
+            return { alreadyExists: true };
           }
 
           try {
@@ -2176,107 +2142,11 @@ export default function ProductsPage() {
               status === 409 ||
               (status === 400 && String(errMsg).toLowerCase().includes('exist'))
             ) {
-              // 1. Try finding the existing product in displayProducts or via backend API
-              let matchedId = displayProducts.find(
-                (p: any) =>
-                  (p.name && p.name.trim().toLowerCase() === targetName) ||
-                  (p.slug && p.slug.trim().toLowerCase() === targetSlug)
-              )?.id;
-
-              // If not found in memory (e.g. pagination or filter), search backend directly
-              if (!matchedId || matchedId.startsWith('p-') || matchedId.startsWith('mcp-')) {
-                try {
-                  const token = typeof window !== 'undefined'
-                    ? (localStorage.getItem('zippy_vendor_token') || localStorage.getItem('vendor_access_token'))
-                    : null;
-                  const searchRes = await fetch(
-                    `${API_BASE_URL}/vendor/products?search=${encodeURIComponent(payload.name || '')}`,
-                    {
-                      headers: {
-                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                      },
-                    }
-                  );
-                  if (searchRes.ok) {
-                    const searchData = await searchRes.json();
-                    const items = Array.isArray(searchData)
-                      ? searchData
-                      : searchData?.data || searchData?.products || [];
-                    const found = items.find(
-                      (item: any) =>
-                        item.name?.trim().toLowerCase() === targetName ||
-                        item.slug?.trim().toLowerCase() === targetSlug
-                    ) || items[0];
-                    if (found?.id) {
-                      matchedId = found.id;
-                    }
-                  }
-                } catch (sErr) {
-                  console.warn('Backend search fallback failed:', sErr);
-                }
-              }
-
-              if (matchedId && !matchedId.startsWith('p-') && !matchedId.startsWith('mcp-')) {
-                try {
-                  const updateRes = await updateProductApi({
-                    id: matchedId,
-                    name: payload.name,
-                    description: payload.description,
-                    mrp: Number(payload.mrp) || undefined,
-                    stock_quantity: Number(payload.stock_quantity) || undefined,
-                    unit: payload.unit || undefined,
-                    pack_size: payload.pack_size || undefined,
-                  }).unwrap();
-
-                  updateProduct(matchedId, {
-                    description: payload.description,
-                    mrp: Number(payload.mrp) || undefined,
-                  });
-
-                  toast.success(`Product "${payload.name}" updated with new description! ✏️`);
-                  refetchProducts();
-                  return updateRes;
-                } catch (patchErr) {
-                  console.warn('Fallback patch error:', patchErr);
-                }
-              }
-
-              // 2. If it's a new product variant, retry with a unique slug and SKU suffix
-              try {
-                const uniqueCode = `${Date.now().toString().slice(-4)}`;
-                const baseSlug = (payload.slug || payload.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-                const retryRes = await addProductApi({
-                  ...payload,
-                  slug: `${baseSlug}-${uniqueCode}`,
-                  sku: `SKU-${Date.now()}-${uniqueCode}`,
-                  barcode: `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
-                  status: payload.status || 'ACTIVE',
-                }).unwrap();
-
-                addProduct({
-                  name: payload.name,
-                  price: Number(payload.mrp) || 0,
-                  mrp: Number(payload.mrp) || 0,
-                  category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
-                  categoryId: payload.category_id,
-                  stock: Number(payload.stock_quantity) || 50,
-                  isAvailable: true,
-                  status: 'ACTIVE',
-                  unit: payload.unit || '1 kg',
-                  image: payload.images?.[0]?.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
-                });
-
-                toast.success(`Product "${payload.name}" added with updated description! 🎉`);
-                refetchProducts();
-                return retryRes;
-              } catch (retryErr: any) {
-                console.error('Retry add product failed:', retryErr);
-              }
-
-              // 3. Graceful fallback: acknowledge update to vendor so they are never blocked by 409
-              toast.success(`Product "${payload.name}" verified with updated description! ✏️`);
-              refetchProducts();
-              return { success: true };
+              toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
+                duration: 5000,
+                icon: 'ℹ️',
+              });
+              return { alreadyExists: true };
             }
 
             if (status === 401 || String(errMsg).toLowerCase().includes('token') || String(errMsg).toLowerCase().includes('unauthorized')) {
