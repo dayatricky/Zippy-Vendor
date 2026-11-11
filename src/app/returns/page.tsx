@@ -50,7 +50,7 @@ import {
   toBackendReturnStatus,
   API_BASE_URL,
 } from '@/store/api/vendorApi';
-import { resolveImageUrl, getAccurateProductImage } from '@/utils/imageUrl';
+import { resolveImageUrl, getAccurateProductImage, isGenericPlaceholder } from '@/utils/imageUrl';
 
 export type ReturnType = 'RETURN' | 'EXCHANGE';
 
@@ -331,6 +331,88 @@ export const formatReturnCustomerPhone = (r: any, ord: any, cust: any, rawAddr: 
   }
 
   return 'Not provided';
+};
+
+export const extractEvidenceList = (firstItem: any, r: any, rawReason: any, itemId: string): string[] => {
+  const candidates: any[] = [];
+
+  const addCandidate = (val: any) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach(addCandidate);
+    } else if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            parsed.forEach(addCandidate);
+            return;
+          }
+        } catch {}
+      }
+      if (trimmed.includes(',')) {
+        trimmed.split(',').forEach((sub) => addCandidate(sub.trim()));
+        return;
+      }
+      if (trimmed.length > 0 && !isGenericPlaceholder(trimmed)) {
+        candidates.push(trimmed);
+      }
+    } else if (typeof val === 'object' && val !== null) {
+      const fn = val.url || val.filename || val.path || val.file || val.image_url || val.image || val.name || '';
+      if (fn && !isGenericPlaceholder(fn)) {
+        candidates.push(fn);
+      }
+    }
+  };
+
+  addCandidate(firstItem?.evidence_urls);
+  addCandidate(firstItem?.evidenceUrls);
+  addCandidate(firstItem?.evidence);
+  addCandidate(firstItem?.evidence_files);
+  addCandidate(firstItem?.evidenceFiles);
+  addCandidate(firstItem?.evidences);
+  addCandidate(firstItem?.proof_images);
+  addCandidate(firstItem?.proofImages);
+  addCandidate(firstItem?.proof_photos);
+  addCandidate(firstItem?.proofPhotos);
+  addCandidate(firstItem?.customer_proofs);
+  addCandidate(firstItem?.customerProofs);
+  addCandidate(firstItem?.attachments);
+  addCandidate(firstItem?.photos);
+
+  addCandidate(r?.evidence_urls);
+  addCandidate(r?.evidenceUrls);
+  addCandidate(r?.evidence);
+  addCandidate(r?.evidence_files);
+  addCandidate(r?.evidenceFiles);
+  addCandidate(r?.proof_images);
+  addCandidate(r?.proofImages);
+  addCandidate(r?.proof_photos);
+  addCandidate(r?.proofPhotos);
+  addCandidate(r?.customer_proofs);
+  addCandidate(r?.customerProofs);
+  addCandidate(r?.attachments);
+  addCandidate(r?.photos);
+
+  if (typeof rawReason === 'object' && rawReason !== null) {
+    addCandidate(rawReason.images);
+    addCandidate(rawReason.evidence);
+    addCandidate(rawReason.evidence_urls);
+    addCandidate(rawReason.proof_images);
+    addCandidate(rawReason.photos);
+    addCandidate(rawReason.proofs);
+  }
+
+  const uniqueUrls = Array.from(new Set(candidates))
+    .map((raw) => {
+      const str = typeof raw === 'string' ? raw : String(raw);
+      if (isGenericPlaceholder(str)) return '';
+      return getReturnEvidenceUrl(itemId, str);
+    })
+    .filter((url) => Boolean(url) && !isGenericPlaceholder(url));
+
+  return uniqueUrls;
 };
 
 const INITIAL_RETURNS: ReturnRequest[] = [
@@ -940,7 +1022,7 @@ const EvidenceImage: React.FC<EvidenceImageProps> = ({
   const [hasError, setHasError] = useState<boolean>(false);
 
   useEffect(() => {
-    if (!src || typeof src !== 'string' || !src.trim()) {
+    if (!src || typeof src !== 'string' || !src.trim() || isGenericPlaceholder(src)) {
       setIsLoading(false);
       setHasError(true);
       return;
@@ -950,6 +1032,19 @@ const EvidenceImage: React.FC<EvidenceImageProps> = ({
 
     // Direct images that don't need token (data URI or blob)
     if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+      setBlobSrc(trimmed);
+      setIsLoading(false);
+      return;
+    }
+
+    // Direct public URLs (e.g. Unsplash, Cloudinary, AWS S3, etc.) that do not touch the protected vendor API:
+    // Render them directly without attempting an authenticated fetch (which triggers CORS failures)
+    const isProtectedBackendEndpoint =
+      trimmed.includes('/vendor/') ||
+      trimmed.includes('/api/v1/vendor/') ||
+      trimmed.includes('/evidence/');
+
+    if (!isProtectedBackendEndpoint && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
       setBlobSrc(trimmed);
       setIsLoading(false);
       return;
@@ -1128,21 +1223,7 @@ export default function ReturnsPage() {
       : null;
 
     if (targetItem) {
-      const rawEvidenceList: any[] = [
-        ...(Array.isArray(targetItem?.evidence) ? targetItem.evidence : []),
-        ...(Array.isArray(targetItem?.evidence_urls) ? targetItem.evidence_urls : []),
-        ...(Array.isArray(targetItem?.evidence_files) ? targetItem.evidence_files : []),
-        ...(Array.isArray(targetItem?.evidences) ? targetItem.evidences : []),
-        ...(Array.isArray(detail.evidence) ? detail.evidence : []),
-        ...(Array.isArray(detail.evidence_urls) ? detail.evidence_urls : []),
-        ...(Array.isArray(detail.evidence_files) ? detail.evidence_files : []),
-      ];
-      const additionalImages = rawEvidenceList
-        .map((ev) => {
-          const fn = typeof ev === 'string' ? ev : ev.filename || ev.url || ev.name || '';
-          return getReturnEvidenceUrl(selectedReturn.itemId || '', fn);
-        })
-        .filter(Boolean);
+      const additionalImages = extractEvidenceList(targetItem, detail, null, selectedReturn.itemId || '');
 
       const deepProductImg =
         targetItem?.productImage ||
@@ -1170,19 +1251,22 @@ export default function ReturnsPage() {
 
       setSelectedReturn((prev) => {
         if (!prev) return prev;
-        const mergedImages = Array.from(new Set([...(prev.reason.images || []), ...additionalImages]));
+        const allEv = [...(prev.reason.images || []), ...additionalImages].filter(
+          (img) => Boolean(img) && !isGenericPlaceholder(img)
+        );
+        const mergedImages = Array.from(new Set(allEv));
         return {
           ...prev,
           product: {
             ...prev.product,
             quantity: deepReturnQty > 0 ? deepReturnQty : prev.product.quantity,
-            image: deepProductImg
+            image: deepProductImg && !isGenericPlaceholder(deepProductImg)
               ? getAccurateProductImage(prev.product.name, prev.product.category, resolveImageUrl(deepProductImg))
-              : prev.product.image,
+              : getAccurateProductImage(prev.product.name, prev.product.category, prev.product.image),
           },
           reason: {
             ...prev.reason,
-            images: mergedImages.length > 0 ? mergedImages : prev.reason.images,
+            images: mergedImages,
           },
           review: {
             ...prev.review,
@@ -1462,25 +1546,7 @@ export default function ReturnsPage() {
             r.customer_notes ||
             (typeof rawReason === 'string' ? `Customer stated: ${rawReason}` : 'Customer requested return for this item.');
 
-          const rawEvidenceList: any[] = [
-            ...(Array.isArray(firstItem?.evidence_urls) ? firstItem.evidence_urls : []),
-            ...(Array.isArray(firstItem?.evidence) ? firstItem.evidence : []),
-            ...(Array.isArray(firstItem?.evidence_files) ? firstItem.evidence_files : []),
-            ...(Array.isArray(firstItem?.evidences) ? firstItem.evidences : []),
-            ...(Array.isArray(r.evidence_urls) ? r.evidence_urls : []),
-            ...(Array.isArray(r.evidence) ? r.evidence : []),
-            ...(Array.isArray(r.evidence_files) ? r.evidence_files : []),
-            ...(Array.isArray(rawReason?.images) ? rawReason.images : []),
-          ];
-
-          const reasonImages: string[] = rawEvidenceList
-            .map((item) => {
-              if (!item) return '';
-              const filename = typeof item === 'string' ? item : item.url || item.filename || item.path || item.name || '';
-              if (!filename) return '';
-              return getReturnEvidenceUrl(itemId, filename);
-            })
-            .filter(Boolean);
+          const reasonImages: string[] = extractEvidenceList(firstItem, r, rawReason, itemId);
 
           // Refund details: Full payable refund amount (Full order total or API refund amount)
           const payableRefund = Number(
@@ -1728,10 +1794,7 @@ export default function ReturnsPage() {
       return item;
     });
 
-    setReturnsList(updated);
-    setIsApproveOpen(false);
     setIsSubmitting(true);
-
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
       await updateReturnStatusApi({
@@ -1740,11 +1803,15 @@ export default function ReturnsPage() {
         status: 'APPROVED',
         remarks: approveForm.vendorNotes,
       }).unwrap();
-      toast.success(`Request ${selectedReturn.returnNumber} Approved on server! Pickup scheduled.`);
+
+      setReturnsList(updated);
+      setIsApproveOpen(false);
+      toast.success(`Request ${selectedReturn.returnNumber} approved successfully! Pickup scheduled.`);
       refetchReturns();
     } catch (e: any) {
-      console.warn('API sync notice:', e);
-      toast.success(`Request ${selectedReturn.returnNumber} Approved! Pickup scheduled.`);
+      console.error('Failed to approve return on server:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server error approving return';
+      toast.error(`Approval failed: ${errMsg}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -1801,10 +1868,7 @@ export default function ReturnsPage() {
       return item;
     });
 
-    setReturnsList(updated);
-    setIsRejectOpen(false);
     setIsSubmitting(true);
-
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
       const finalReason = `${rejectForm.rejectionReason}${rejectForm.customRemarks ? ': ' + rejectForm.customRemarks : ''}`;
@@ -1815,11 +1879,15 @@ export default function ReturnsPage() {
         rejection_reason: finalReason,
         reason: finalReason,
       }).unwrap();
-      toast.error(`Request ${selectedReturn.returnNumber} rejected on server.`);
+
+      setReturnsList(updated);
+      setIsRejectOpen(false);
+      toast.success(`Request ${selectedReturn.returnNumber} has been declined.`);
       refetchReturns();
     } catch (e: any) {
-      console.warn('API sync notice:', e);
-      toast.error(`Request ${selectedReturn.returnNumber} has been rejected.`);
+      console.error('Failed to decline return on server:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server error declining request';
+      toast.error(`Failed to decline request: ${errMsg}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -1840,6 +1908,12 @@ export default function ReturnsPage() {
   const handleConfirmRefund = async () => {
     if (!selectedReturn) return;
     const finalAmount = Math.max(0, refundForm.refundAmount - refundForm.deductionAmount);
+
+    if (finalAmount <= 0) {
+      toast.error('Refund amount must be greater than ₹0. To reject this claim, please use the Decline Request button.');
+      return;
+    }
+
     const txnRef = `REF-${refundForm.refundMode === 'UPI' ? 'UPI' : 'PG'}-${Date.now().toString().slice(-8)}`;
 
     const newTimelineEvent: TimelineEvent = {
@@ -1871,23 +1945,29 @@ export default function ReturnsPage() {
       return item;
     });
 
-    setReturnsList(updated);
-    setIsRefundOpen(false);
-    toast.success(`Refund of ₹${finalAmount} processed successfully!`);
-
+    setIsSubmitting(true);
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
       await updateReturnStatusApi({
         itemId: targetItemId,
-        returnId: selectedReturn.id,
+        returnId: selectedReturn.returnId || selectedReturn.id,
         status: 'REFUND_COMPLETED',
         refundAmount: finalAmount,
         refund_amount: finalAmount,
-        remarks: `Refund issued. Txn: ${txnRef}`,
+        remarks: `Refund issued: ₹${finalAmount}. Txn: ${txnRef}`,
       }).unwrap();
+
+      // Only update state and close modal on successful API response
+      setReturnsList(updated);
+      setIsRefundOpen(false);
+      toast.success(`Refund of ₹${finalAmount} processed successfully! 🎉`);
       refetchReturns();
     } catch (e: any) {
-      console.warn('API sync warning:', e);
+      console.error('Failed to process refund on server:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server rejected refund request. Please check inputs.';
+      toast.error(`Refund failed: ${errMsg}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1936,23 +2016,28 @@ export default function ReturnsPage() {
       return item;
     });
 
-    setReturnsList(updated);
-    setIsDispatchExchangeOpen(false);
-    toast.success(`Replacement dispatched with Tracking: ${exchangeForm.trackingNumber}`);
-
+    setIsSubmitting(true);
     try {
       const targetItemId = selectedReturn.itemId || selectedReturn.id;
       await updateReturnStatusApi({
         itemId: targetItemId,
-        returnId: selectedReturn.id,
+        returnId: selectedReturn.returnId || selectedReturn.id,
         status: 'EXCHANGE_DISPATCHED',
         trackingNumber: exchangeForm.trackingNumber,
         tracking_number: exchangeForm.trackingNumber,
         remarks: exchangeForm.notes,
       }).unwrap();
+
+      setReturnsList(updated);
+      setIsDispatchExchangeOpen(false);
+      toast.success(`Replacement dispatched with Tracking: ${exchangeForm.trackingNumber}`);
       refetchReturns();
     } catch (e: any) {
-      console.warn('API sync warning:', e);
+      console.error('Failed to dispatch exchange on server:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server error occurred while dispatching exchange.';
+      toast.error(`Dispatch failed: ${errMsg}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1977,20 +2062,22 @@ export default function ReturnsPage() {
       return item;
     });
 
-    setReturnsList(updated);
-    toast.success(`Status updated to: ${nextStatus.replace(/_/g, ' ')}`);
-
     try {
       const targetItemId = r.itemId || r.id;
       await updateReturnStatusApi({
         itemId: targetItemId,
-        returnId: r.id,
+        returnId: r.returnId || r.id,
         status: nextStatus,
         remarks: desc,
       }).unwrap();
+
+      setReturnsList(updated);
+      toast.success(`Status updated to: ${nextStatus.replace(/_/g, ' ')}`);
       refetchReturns();
     } catch (e: any) {
-      console.warn('API sync warning:', e);
+      console.error('API sync error:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server error updating status.';
+      toast.error(`Failed to update status: ${errMsg}`);
     }
   };
 
@@ -3414,22 +3501,47 @@ export default function ReturnsPage() {
                   className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#167a46]"
                 />
               </div>
+
+              {/* Warning if net refund is zero */}
+              {Math.max(0, refundForm.refundAmount - refundForm.deductionAmount) <= 0 && (
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    Refund Amount Cannot Be ₹0
+                  </div>
+                  <p className="text-[11px] text-amber-700 leading-relaxed">
+                    A refund must be greater than ₹0. If you are withholding the entire amount due to damage or policy violation, please cancel this dialog and click <strong>Decline Request</strong> instead.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Modal Footer */}
             <div className="shrink-0 px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2.5">
               <button
+                type="button"
                 onClick={() => setIsRefundOpen(false)}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirmRefund}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5"
+                disabled={Math.max(0, refundForm.refundAmount - refundForm.deductionAmount) <= 0 || isSubmitting}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Check className="w-4 h-4" />
-                Authorize & Release ₹{Math.max(0, refundForm.refundAmount - refundForm.deductionAmount)}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Processing Refund...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Authorize & Release ₹{Math.max(0, refundForm.refundAmount - refundForm.deductionAmount)}
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -3673,21 +3785,29 @@ export default function ReturnsPage() {
                   <p className="text-slate-700 italic">"{selectedReturn.reason.customerNotes}"</p>
 
                   {/* Proof Images */}
-                  {selectedReturn.reason.images.length > 0 && (
+                  {selectedReturn.reason.images && selectedReturn.reason.images.length > 0 ? (
                     <div className="pt-2">
-                      <div className="text-[10px] font-bold text-slate-500 mb-1.5">Attached Photos:</div>
-                      <div className="flex items-center gap-2 overflow-x-auto">
+                      <div className="text-[10px] font-bold text-slate-500 mb-1.5 flex items-center justify-between">
+                        <span>Attached Photos ({selectedReturn.reason.images.length}):</span>
+                        <span className="text-[10px] text-emerald-700 font-extrabold">Click to inspect</span>
+                      </div>
+                      <div className="flex items-center gap-2 overflow-x-auto py-1">
                         {selectedReturn.reason.images.map((img, idx) => (
                           <EvidenceImage
                             key={idx}
                             src={img}
-                            alt="Proof"
+                            alt="Customer Proof"
                             onClick={(effective) => setLightboxImage(effective)}
-                            className="w-16 h-16 rounded-xl object-cover border border-amber-200 cursor-pointer hover:scale-105 transition-transform"
+                            className="w-16 h-16 rounded-xl object-cover border border-amber-300 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
                             showZoomIcon
                           />
                         ))}
                       </div>
+                    </div>
+                  ) : (
+                    <div className="pt-2 text-[11px] text-slate-500 italic flex items-center gap-1.5">
+                      <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span>No customer proof photos attached for this claim.</span>
                     </div>
                   )}
                 </div>

@@ -412,6 +412,50 @@ export default function AiProductChatbot({
     return uuidCat || activeCategories[0];
   };
 
+  // Auth Token & Header helper for AI endpoints
+  const getAiAuthHeaders = (): Record<string, string> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token && token.trim()) {
+      headers['Authorization'] = token.startsWith('Bearer ') ? token.trim() : `Bearer ${token.trim()}`;
+    }
+    return headers;
+  };
+
+  const refreshVendorToken = async (): Promise<string | null> => {
+    if (typeof window === 'undefined') return null;
+    const refreshToken = localStorage.getItem('zippy_vendor_refresh_token');
+    if (!refreshToken) return null;
+    try {
+      const res = await fetch(`${API_BASE_URL}/vendor/auth/refresh-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const newAccessToken =
+          data?.data?.accessToken ||
+          data?.accessToken ||
+          data?.data?.token ||
+          data?.token;
+        const newRefreshToken = data?.data?.refreshToken || data?.refreshToken;
+        if (newAccessToken) {
+          localStorage.setItem('zippy_vendor_token', newAccessToken);
+          if (newRefreshToken) {
+            localStorage.setItem('zippy_vendor_refresh_token', newRefreshToken);
+          }
+          return newAccessToken;
+        }
+      }
+    } catch (e) {
+      console.warn('Auto refresh failed in copilot:', e);
+    }
+    return null;
+  };
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-1',
@@ -481,26 +525,62 @@ export default function AiProductChatbot({
 
       const toastId = toast.loading('Searching products with MCP AI (search_products_from_voice_tool)...');
 
-      const response = await fetch('/api/ai/products/voice-search', {
+      let headers = getAiAuthHeaders();
+      let response = await fetch('/api/ai/products/voice-search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ audio_base64: base64 }),
       });
 
-      const data = await response.json();
+      let data = await response.json();
+
+      // If unauthorized, attempt auto-refreshing token and retry once
+      const isAuthErr =
+        !data.success &&
+        data.message &&
+        (data.message.toLowerCase().includes('unauthorized') ||
+          data.message.toLowerCase().includes('authorization') ||
+          data.message.toLowerCase().includes('token'));
+
+      if (isAuthErr) {
+        const newToken = await refreshVendorToken();
+        if (newToken) {
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${newToken}`,
+          };
+          response = await fetch('/api/ai/products/voice-search', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ audio_base64: base64 }),
+          });
+          data = await response.json();
+        }
+      }
+
       toast.dismiss(toastId);
 
       if (!data.success) {
+        const isStillAuthErr =
+          data.message &&
+          (data.message.toLowerCase().includes('unauthorized') ||
+            data.message.toLowerCase().includes('authorization') ||
+            data.message.toLowerCase().includes('token'));
+
+        const friendlyMsg = isStillAuthErr
+          ? 'Your vendor session has expired or is unauthorized. Please log in again to use Voice Search.'
+          : data.message || 'Could not understand audio. Please speak clearly and try again.';
+
         setMessages((prev) => [
           ...prev,
           {
             id: botMsgId,
             sender: 'assistant',
-            text: `⚠️ **Voice Search Error**: ${data.message || 'Could not understand audio. Please speak clearly and try again.'}`,
+            text: `⚠️ **Voice Search Error**: ${friendlyMsg}`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        toast.error(data.message || 'Voice search failed');
+        toast.error(friendlyMsg);
         return;
       }
 
@@ -646,7 +726,7 @@ export default function AiProductChatbot({
       const currentProd = editingProductData.product;
       const response = await fetch('/api/ai/products/update', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAiAuthHeaders(),
         body: JSON.stringify({
           user_message: promptText,
           product_detail: {
@@ -726,9 +806,10 @@ export default function AiProductChatbot({
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/ai/products', {
+      let headers = getAiAuthHeaders();
+      let response = await fetch('/api/ai/products', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           message: textToSend,
           categories: activeCategories,
@@ -736,7 +817,34 @@ export default function AiProductChatbot({
         }),
       });
 
-      const data = await response.json();
+      let data = await response.json();
+
+      const isAuthErr =
+        !data.success &&
+        data.message &&
+        (data.message.toLowerCase().includes('unauthorized') ||
+          data.message.toLowerCase().includes('authorization') ||
+          data.message.toLowerCase().includes('token'));
+
+      if (isAuthErr) {
+        const newToken = await refreshVendorToken();
+        if (newToken) {
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${newToken}`,
+          };
+          response = await fetch('/api/ai/products', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              message: textToSend,
+              categories: activeCategories,
+              currentProducts,
+            }),
+          });
+          data = await response.json();
+        }
+      }
 
       if (data.success && Array.isArray(data.products)) {
         if (data.server_url) {

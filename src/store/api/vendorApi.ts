@@ -916,12 +916,7 @@ export const vendorApi = createApi({
           payload.rejection_reason = rejectionReason;
         }
 
-        if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
-          payload.refund_amount = body.refund_amount ?? body.refundAmount;
-        }
-        if (body.tracking_number || body.trackingNumber) {
-          payload.tracking_number = body.tracking_number || body.trackingNumber;
-        }
+        // DTO strictly allows: status, rejection_reason. No other properties must exist.
         return {
           url: `/vendor/returns/items/${targetId}/status`,
           method: 'PATCH',
@@ -972,12 +967,7 @@ export const vendorApi = createApi({
           payload.rejection_reason = rejectionReason;
         }
 
-        if (body.refund_amount !== undefined || body.refundAmount !== undefined) {
-          payload.refund_amount = body.refund_amount ?? body.refundAmount;
-        }
-        if (body.tracking_number || body.trackingNumber) {
-          payload.tracking_number = body.tracking_number || body.trackingNumber;
-        }
+        // DTO strictly allows: status, rejection_reason. No other properties must exist.
         return {
           url: `/vendor/returns/items/${targetId}/status`,
           method: 'PATCH',

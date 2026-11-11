@@ -63,6 +63,7 @@ export async function POST(request: Request) {
       );
     }
 
+    const authHeader = request.headers.get('authorization') || undefined;
     const mcpUrl = getMcpUrl();
     const updatedResult = await callMcpUpdateProductTool(user_message, {
       product_name: product_detail.product_name,
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
       description: product_detail.description,
       key_features: product_detail.key_features,
       price_range: product_detail.price_range,
-    });
+    }, authHeader);
 
     if (!updatedResult) {
       return NextResponse.json(

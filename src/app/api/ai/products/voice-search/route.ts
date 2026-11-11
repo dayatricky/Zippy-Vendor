@@ -70,8 +70,15 @@ export async function POST(request: Request) {
       rawMsg.toLowerCase().includes('understand the audio') ||
       rawMsg.toLowerCase().includes('audio format');
 
+    const isAuthIssue =
+      rawMsg.toLowerCase().includes('unauthorized') ||
+      rawMsg.toLowerCase().includes('authorization') ||
+      rawMsg.toLowerCase().includes('token');
+
     const userFriendlyMessage = isAudioIssue
       ? 'Could not understand the audio. Please speak clearly (e.g. "Milk", "Amul Milk", "Bread") and try again.'
+      : isAuthIssue
+      ? 'Vendor session expired or unauthorized. Please re-login to your store account to use Voice Search.'
       : rawMsg;
 
     return NextResponse.json(
