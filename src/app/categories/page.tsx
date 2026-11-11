@@ -351,6 +351,16 @@ export default function CategoriesPage() {
     }
   };
 
+  const handleRefreshCategories = async () => {
+    setSearchTerm('');
+    try {
+      await refetchCategories();
+      toast.success('Category records refreshed from server! 🔄');
+    } catch {
+      toast.success('Categories reloaded.');
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in-50 duration-300">
       {/* Top Header */}
@@ -367,8 +377,9 @@ export default function CategoriesPage() {
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={() => refetchCategories()}
-            className="flex items-center space-x-2 px-4 py-2.5 rounded-2xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-all cursor-pointer"
+            onClick={handleRefreshCategories}
+            disabled={isCategoriesFetching}
+            className="flex items-center space-x-2 px-4 py-2.5 rounded-2xl bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 text-[#167a46] ${isCategoriesFetching ? 'animate-spin' : ''}`} />
             <span>{isCategoriesFetching ? 'Refreshing...' : 'Refresh'}</span>

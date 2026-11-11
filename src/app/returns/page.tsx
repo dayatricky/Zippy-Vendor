@@ -47,8 +47,10 @@ import {
   useUpdateReturnItemStatusMutation,
   useUpdateReturnStatusMutation,
   getReturnEvidenceUrl,
+  toBackendReturnStatus,
   API_BASE_URL,
 } from '@/store/api/vendorApi';
+import { resolveImageUrl, getAccurateProductImage } from '@/utils/imageUrl';
 
 export type ReturnType = 'RETURN' | 'EXCHANGE';
 
@@ -89,6 +91,7 @@ export interface ReturnRequest {
     address: string;
     city: string;
     pincode: string;
+    locationText?: string;
   };
   product: {
     id: string;
@@ -181,6 +184,154 @@ export function formatQuantityWithUnit(qty: number, rawUnit?: string): string {
   // Otherwise, e.g. "kg", "g", "packet", "box"
   return `${safeQty} ${cleanUnit}`;
 }
+
+export const formatCustomerAddress = (rawAddr: any): { fullAddress: string; city: string; pincode: string; locationText: string } => {
+  if (!rawAddr) {
+    return {
+      fullAddress: 'Customer Delivery Address',
+      city: 'Local Area',
+      pincode: '',
+      locationText: 'Location on file',
+    };
+  }
+
+  if (typeof rawAddr === 'string') {
+    const trimmed = rawAddr.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+          return formatCustomerAddress(parsed);
+        }
+      } catch {
+        // Fall back to string parsing
+      }
+    }
+    const pinMatch = trimmed.match(/\b\d{6}\b/);
+    const pin = pinMatch ? pinMatch[0] : '';
+    const cityPart = trimmed.split(',').slice(-2, -1)[0]?.trim() || '';
+    return {
+      fullAddress: trimmed,
+      city: cityPart || 'Local Area',
+      pincode: pin,
+      locationText: trimmed,
+    };
+  }
+
+  if (typeof rawAddr === 'object' && rawAddr !== null) {
+    const line1 = rawAddr.address_line1 || rawAddr.address_line || rawAddr.full_address || rawAddr.line1 || rawAddr.street || '';
+    const line2 = rawAddr.address_line2 || rawAddr.landmark || rawAddr.line2 || rawAddr.area || '';
+    const city = rawAddr.city || rawAddr.district || '';
+    const state = rawAddr.state || '';
+    const pincode = String(rawAddr.postal_code || rawAddr.pincode || rawAddr.zip || rawAddr.zip_code || '').trim();
+
+    const parts = [line1, line2, city, state, pincode].filter((p) => typeof p === 'string' && p.trim().length > 0);
+    const fullAddress = parts.length > 0 ? parts.join(', ') : 'Customer Delivery Address';
+
+    let locationText = '';
+    if (city && pincode) {
+      locationText = `${city} (${pincode})`;
+    } else if (city) {
+      locationText = city;
+    } else if (line1 && pincode) {
+      locationText = `${line1} (${pincode})`;
+    } else if (line1) {
+      locationText = line1;
+    } else if (fullAddress && fullAddress !== 'Customer Delivery Address') {
+      locationText = fullAddress;
+    } else {
+      locationText = 'Location on file';
+    }
+
+    return {
+      fullAddress,
+      city: city || 'Local Area',
+      pincode,
+      locationText,
+    };
+  }
+
+  return {
+    fullAddress: 'Customer Delivery Address',
+    city: 'Local Area',
+    pincode: '',
+    locationText: 'Location on file',
+  };
+};
+
+export const formatReturnCustomerName = (
+  r: any,
+  ord: any,
+  cust: any,
+  rawAddr: any,
+  returnNumber: string
+): string => {
+  const candidateName =
+    cust?.full_name ||
+    cust?.name ||
+    cust?.contact_name ||
+    cust?.username ||
+    r?.customer_name ||
+    r?.customerName ||
+    r?.user?.full_name ||
+    r?.user?.name ||
+    ord?.customer_name ||
+    ord?.customerName ||
+    ord?.customer?.full_name ||
+    ord?.customer?.name ||
+    ord?.user?.full_name ||
+    ord?.user?.name ||
+    rawAddr?.contact_name ||
+    rawAddr?.name ||
+    rawAddr?.recipient_name ||
+    (cust?.first_name ? `${cust.first_name} ${cust.last_name || ''}`.trim() : null);
+
+  if (typeof candidateName === 'string' && candidateName.trim() && candidateName.toLowerCase() !== 'customer') {
+    return candidateName.trim();
+  }
+
+  const custId = r?.customer_id || r?.customerId || ord?.customer_id || ord?.customerId || cust?.id || cust?._id;
+  if (custId && String(custId).trim()) {
+    return `Customer (${String(custId).slice(0, 8)})`;
+  }
+
+  if (ord?.userId || ord?.user_id) {
+    return `Customer (${String(ord.userId || ord.user_id).slice(0, 8)})`;
+  }
+
+  const retSuffix = returnNumber.replace(/^RET-?/i, '').slice(0, 8);
+  return retSuffix ? `Customer (${retSuffix})` : 'Customer';
+};
+
+export const formatReturnCustomerPhone = (r: any, ord: any, cust: any, rawAddr: any): string => {
+  const candidatePhone =
+    cust?.phone_number ||
+    cust?.phone ||
+    cust?.mobile ||
+    r?.customer_phone ||
+    r?.customerPhone ||
+    r?.phone ||
+    ord?.customer_phone ||
+    ord?.customerPhone ||
+    ord?.customer?.phone ||
+    ord?.customer?.phone_number ||
+    ord?.user?.phone ||
+    ord?.user?.phone_number ||
+    rawAddr?.phone ||
+    rawAddr?.phone_number ||
+    rawAddr?.contact_phone ||
+    ord?.phone;
+
+  if (typeof candidatePhone === 'string' && candidatePhone.trim()) {
+    return candidatePhone.trim();
+  }
+
+  if (cust?.email && typeof cust.email === 'string' && cust.email.includes('@')) {
+    return cust.email.trim();
+  }
+
+  return 'Not provided';
+};
 
 const INITIAL_RETURNS: ReturnRequest[] = [
   {
@@ -854,16 +1005,17 @@ const EvidenceImage: React.FC<EvidenceImageProps> = ({
         <div className={`flex items-center justify-center bg-slate-100 animate-pulse ${className}`}>
           <Loader2 className="w-4 h-4 text-[#167a46] animate-spin" />
         </div>
+      ) : hasError ? (
+        <div className={`flex flex-col items-center justify-center bg-slate-100 border border-slate-200 text-slate-400 p-2 text-center rounded-xl shadow-xs ${className}`}>
+          <ImageIcon className="w-5 h-5 text-slate-400 mb-0.5" />
+          <span className="text-[9px] font-bold text-slate-500 leading-tight">Proof Photo</span>
+        </div>
       ) : (
         <img
           src={effectiveSrc}
           alt={alt}
-          onError={(e) => {
-            if (!hasError) {
-              setHasError(true);
-              (e.currentTarget as HTMLImageElement).src =
-                'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
-            }
+          onError={() => {
+            setHasError(true);
           }}
           className={className}
         />
@@ -980,10 +1132,10 @@ export default function ReturnsPage() {
         ...(Array.isArray(targetItem?.evidence) ? targetItem.evidence : []),
         ...(Array.isArray(targetItem?.evidence_urls) ? targetItem.evidence_urls : []),
         ...(Array.isArray(targetItem?.evidence_files) ? targetItem.evidence_files : []),
-        ...(Array.isArray(targetItem?.images) ? targetItem.images : []),
+        ...(Array.isArray(targetItem?.evidences) ? targetItem.evidences : []),
         ...(Array.isArray(detail.evidence) ? detail.evidence : []),
         ...(Array.isArray(detail.evidence_urls) ? detail.evidence_urls : []),
-        ...(Array.isArray(detail.images) ? detail.images : []),
+        ...(Array.isArray(detail.evidence_files) ? detail.evidence_files : []),
       ];
       const additionalImages = rawEvidenceList
         .map((ev) => {
@@ -991,6 +1143,16 @@ export default function ReturnsPage() {
           return getReturnEvidenceUrl(selectedReturn.itemId || '', fn);
         })
         .filter(Boolean);
+
+      const deepProductImg =
+        targetItem?.productImage ||
+        targetItem?.product_image ||
+        targetItem?.image_url ||
+        targetItem?.image ||
+        targetItem?.product?.image_url ||
+        targetItem?.product?.image ||
+        (Array.isArray(targetItem?.product?.images) && targetItem.product.images[0]?.image_url ? targetItem.product.images[0].image_url : null) ||
+        null;
 
       const deepReturnQty = Number(
         targetItem?.exchange_quantity ??
@@ -1014,6 +1176,9 @@ export default function ReturnsPage() {
           product: {
             ...prev.product,
             quantity: deepReturnQty > 0 ? deepReturnQty : prev.product.quantity,
+            image: deepProductImg
+              ? getAccurateProductImage(prev.product.name, prev.product.category, resolveImageUrl(deepProductImg))
+              : prev.product.image,
           },
           reason: {
             ...prev.reason,
@@ -1104,15 +1269,38 @@ export default function ReturnsPage() {
             (orderItem.productId ? `SKU-${String(orderItem.productId).slice(0, 8).toUpperCase()}` : `SKU-${rIdx + 100}`)
           );
 
-          const productImage = String(
+          const rawItemImg =
             firstItem?.productImage ||
+            firstItem?.product_image ||
+            firstItem?.image_url ||
             firstItem?.image ||
+            firstItem?.product?.image_url ||
+            firstItem?.product?.image ||
+            (Array.isArray(firstItem?.product?.images) && firstItem.product.images[0]?.image_url ? firstItem.product.images[0].image_url : null) ||
+            firstItem?.storeItem?.product?.image_url ||
+            firstItem?.storeItem?.product?.image ||
+            (Array.isArray(firstItem?.storeItem?.product?.images) && firstItem.storeItem.product.images[0]?.image_url ? firstItem.storeItem.product.images[0].image_url : null) ||
             orderItem.productImage ||
             orderItem.product_image ||
             orderItem.image_url ||
             orderItem.image ||
             (Array.isArray(orderItem.images) && orderItem.images[0]?.image_url ? orderItem.images[0].image_url : null) ||
-            'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60'
+            (Array.isArray(orderItem.images) && orderItem.images[0]?.url ? orderItem.images[0].url : null) ||
+            null;
+
+          const productCategory = String(
+            orderItem.category ||
+            orderItem.category_name ||
+            firstItem?.category ||
+            (productName.toLowerCase().includes('potato') || productName.toLowerCase().includes('capsicum') || productName.toLowerCase().includes('cabbage')
+              ? 'General Grocery'
+              : 'Store Category')
+          );
+
+          const productImage = getAccurateProductImage(
+            productName,
+            productCategory,
+            rawItemImg ? resolveImageUrl(rawItemImg) : null
           );
 
           // Pricing parsing
@@ -1190,15 +1378,6 @@ export default function ReturnsPage() {
             ? 'unit'
             : rawUnitStr;
 
-          const productCategory = String(
-            orderItem.category ||
-            orderItem.category_name ||
-            firstItem?.category ||
-            (productName.toLowerCase().includes('potato') || productName.toLowerCase().includes('capsicum')
-              ? 'General Grocery'
-              : 'Store Category')
-          );
-
           // Order financials
           const orderSubtotal = Number(ord.subtotal ?? ord.sub_total ?? productTotal);
           const orderDiscountAmount = Number(ord.discountAmount ?? ord.discount_amount ?? 0);
@@ -1217,6 +1396,8 @@ export default function ReturnsPage() {
           const orderStatus = String(ord.status || 'DELIVERED').toUpperCase();
 
           // Status normalization
+          const returnType: ReturnType = String(r.type || firstItem?.type || 'RETURN').toUpperCase() === 'EXCHANGE' ? 'EXCHANGE' : 'RETURN';
+
           const rawStatus = String(firstItem?.status || r.status || 'PENDING').toUpperCase();
           let status: ReturnStatus = 'PENDING_APPROVAL';
           if (['APPROVED', 'ACCEPTED'].includes(rawStatus)) status = 'APPROVED';
@@ -1225,20 +1406,37 @@ export default function ReturnsPage() {
           else if (['PICKED_UP', 'IN_TRANSIT', 'SHIPPED'].includes(rawStatus)) status = 'PICKED_UP';
           else if (['INSPECTED', 'RECEIVED', 'RECEIVED_AT_HUB'].includes(rawStatus)) status = 'INSPECTED';
           else if (['REFUND_COMPLETED', 'REFUNDED'].includes(rawStatus)) status = 'REFUND_COMPLETED';
-          else if (['EXCHANGE_DISPATCHED'].includes(rawStatus)) status = 'EXCHANGE_DISPATCHED';
-          else if (['COMPLETED', 'CLOSED'].includes(rawStatus)) status = 'COMPLETED';
+          else if (['EXCHANGE_DISPATCHED', 'REPLACEMENT_ORDER_CREATED'].includes(rawStatus)) status = 'EXCHANGE_DISPATCHED';
+          else if (['COMPLETED', 'CLOSED'].includes(rawStatus)) {
+            status = returnType === 'RETURN' ? 'REFUND_COMPLETED' : 'COMPLETED';
+          }
           else status = 'PENDING_APPROVAL';
 
-          const returnType: ReturnType = String(r.type || firstItem?.type || 'RETURN').toUpperCase() === 'EXCHANGE' ? 'EXCHANGE' : 'RETURN';
-
-          // Customer
+          // Customer and address details
           const cust = r.customer || r.user || ord.customer || ord.user || {};
-          const customerName = cust.name || cust.full_name || cust.username || (ord.userId ? `Customer (${ord.userId.slice(0, 8)})` : 'Customer');
-          const customerPhone = cust.phone || cust.phone_number || cust.mobile || '+91 98765 43210';
-          const customerEmail = cust.email || 'customer@zippy.in';
-          const customerAddress = cust.address || cust.delivery_address?.address_line1 || ord.delivery_address?.address_line1 || ord.deliveryAddress || 'Customer Delivery Address';
-          const customerCity = cust.city || cust.delivery_address?.city || ord.delivery_address?.city || 'Local Area';
-          const customerPincode = cust.pincode || cust.postal_code || ord.delivery_address?.postal_code || '400001';
+          const rawAddressObj =
+            r.pickup_address ||
+            r.pickupAddress ||
+            r.delivery_address ||
+            r.deliveryAddress ||
+            r.address ||
+            ord.delivery_address ||
+            ord.deliveryAddress ||
+            ord.address ||
+            ord.shipping_address ||
+            ord.shippingAddress ||
+            cust.delivery_address ||
+            cust.address ||
+            null;
+
+          const parsedAddr = formatCustomerAddress(rawAddressObj);
+          const customerName = formatReturnCustomerName(r, ord, cust, rawAddressObj, returnNumber);
+          const customerPhone = formatReturnCustomerPhone(r, ord, cust, rawAddressObj);
+          const customerEmail = String(cust.email || r.customer_email || ord.customer_email || ord.customer?.email || 'customer@zippy.in');
+          const customerAddress = parsedAddr.fullAddress;
+          const customerCity = parsedAddr.city;
+          const customerPincode = parsedAddr.pincode;
+          const customerLocationText = parsedAddr.locationText;
 
           // Reason
           const rawReason = firstItem?.reason || r.reason || {};
@@ -1269,12 +1467,10 @@ export default function ReturnsPage() {
             ...(Array.isArray(firstItem?.evidence) ? firstItem.evidence : []),
             ...(Array.isArray(firstItem?.evidence_files) ? firstItem.evidence_files : []),
             ...(Array.isArray(firstItem?.evidences) ? firstItem.evidences : []),
-            ...(Array.isArray(firstItem?.images) ? firstItem.images : []),
             ...(Array.isArray(r.evidence_urls) ? r.evidence_urls : []),
             ...(Array.isArray(r.evidence) ? r.evidence : []),
             ...(Array.isArray(r.evidence_files) ? r.evidence_files : []),
             ...(Array.isArray(rawReason?.images) ? rawReason.images : []),
-            ...(Array.isArray(r.images) ? r.images : []),
           ];
 
           const reasonImages: string[] = rawEvidenceList
@@ -1336,6 +1532,7 @@ export default function ReturnsPage() {
               address: customerAddress,
               city: customerCity,
               pincode: customerPincode,
+              locationText: customerLocationText,
             },
             product: {
               id: String(orderItem.productId || orderItem.id || `prod-${rIdx}`),
@@ -1688,8 +1885,9 @@ export default function ReturnsPage() {
         refund_amount: finalAmount,
         remarks: `Refund issued. Txn: ${txnRef}`,
       }).unwrap();
-    } catch (e) {
-      // Local state updated
+      refetchReturns();
+    } catch (e: any) {
+      console.warn('API sync warning:', e);
     }
   };
 
@@ -1752,8 +1950,9 @@ export default function ReturnsPage() {
         tracking_number: exchangeForm.trackingNumber,
         remarks: exchangeForm.notes,
       }).unwrap();
-    } catch (e) {
-      // Local state updated
+      refetchReturns();
+    } catch (e: any) {
+      console.warn('API sync warning:', e);
     }
   };
 
@@ -1789,8 +1988,9 @@ export default function ReturnsPage() {
         status: nextStatus,
         remarks: desc,
       }).unwrap();
-    } catch (e) {
-      // Local state updated
+      refetchReturns();
+    } catch (e: any) {
+      console.warn('API sync warning:', e);
     }
   };
 
@@ -1943,6 +2143,13 @@ export default function ReturnsPage() {
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-teal-100 text-teal-800 border border-teal-300 shadow-xs">
             <CheckCheck className="w-3.5 h-3.5 text-teal-600" />
             Refund Credited
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs">
+            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+            Completed / Settled
           </span>
         );
       case 'EXCHANGE_DISPATCHED':
@@ -2347,7 +2554,7 @@ export default function ReturnsPage() {
                       alt={item.product.name}
                       onError={(e) => {
                         (e.currentTarget as HTMLImageElement).src =
-                          'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
+                          getAccurateProductImage(item.product.name, item.product.category);
                       }}
                       className="w-20 h-20 rounded-2xl object-cover border border-slate-200 shrink-0 bg-slate-50 shadow-xs"
                     />
@@ -2463,13 +2670,22 @@ export default function ReturnsPage() {
                         </div>
                         <div className="text-slate-600 flex items-center gap-1.5 font-medium">
                           <Phone className="w-3.5 h-3.5 text-slate-400" />
-                          <a href={`tel:${item.customer.phone}`} className="hover:text-emerald-700 hover:underline">
-                            {item.customer.phone}
-                          </a>
+                          {item.customer.phone && item.customer.phone !== 'Not provided' ? (
+                            <a href={`tel:${item.customer.phone}`} className="hover:text-emerald-700 hover:underline">
+                              {item.customer.phone}
+                            </a>
+                          ) : (
+                            <span className="text-slate-400">Phone not provided</span>
+                          )}
                         </div>
                         <div className="text-slate-500 flex items-start gap-1.5 text-[11px] line-clamp-2">
                           <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                          {item.customer.city} ({item.customer.pincode})
+                          <span>
+                            {item.customer.locationText ||
+                              (item.customer.pincode
+                                ? `${item.customer.city} (${item.customer.pincode})`
+                                : item.customer.city || 'Location on file')}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -2663,9 +2879,25 @@ export default function ReturnsPage() {
                       </>
                     )}
 
-                    {/* If APPROVED: Allow scheduling / marking picked up */}
-                    {item.status === 'APPROVED' && (
+                    {/* If APPROVED or PICKUP_SCHEDULED: Doorstep pickup actions */}
+                    {(item.status === 'APPROVED' || item.status === 'PICKUP_SCHEDULED') && (
                       <>
+                        {item.status === 'APPROVED' && (
+                          <button
+                            onClick={() =>
+                              handleQuickStatusAdvance(
+                                item,
+                                'PICKUP_SCHEDULED',
+                                'Doorstep Pickup Scheduled',
+                                'Logistics pickup scheduled with delivery courier partner.'
+                              )
+                            }
+                            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
+                          >
+                            <Truck className="w-3.5 h-3.5" />
+                            Schedule Doorstep Pickup
+                          </button>
+                        )}
                         <button
                           onClick={() =>
                             handleQuickStatusAdvance(
@@ -2677,8 +2909,8 @@ export default function ReturnsPage() {
                           }
                           className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
                         >
-                          <Truck className="w-3.5 h-3.5" />
-                          Mark as Picked Up
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Mark as Picked Up / Received
                         </button>
                       </>
                     )}
@@ -2781,7 +3013,7 @@ export default function ReturnsPage() {
                   alt={selectedReturn.product.name}
                   onError={(e) => {
                     (e.currentTarget as HTMLImageElement).src =
-                      'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
+                      getAccurateProductImage(selectedReturn.product.name, selectedReturn.product.category);
                   }}
                   className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
                 />
@@ -3341,7 +3573,7 @@ export default function ReturnsPage() {
                       alt={selectedReturn.product.name}
                       onError={(e) => {
                         (e.currentTarget as HTMLImageElement).src =
-                          'https://images.unsplash.com/photo-1542838132-92c53300491e?w=500&auto=format&fit=crop&q=60';
+                          getAccurateProductImage(selectedReturn.product.name, selectedReturn.product.category);
                       }}
                       className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
                     />
@@ -3364,8 +3596,15 @@ export default function ReturnsPage() {
                   <div className="text-slate-600 font-medium">
                     {selectedReturn.customer.phone} • {selectedReturn.customer.email}
                   </div>
-                  <div className="text-slate-500">
-                    {selectedReturn.customer.address}, {selectedReturn.customer.city} ({selectedReturn.customer.pincode})
+                  <div className="text-slate-500 leading-relaxed">
+                    {selectedReturn.customer.address}
+                    {selectedReturn.customer.locationText &&
+                    selectedReturn.customer.locationText !== selectedReturn.customer.address &&
+                    selectedReturn.customer.locationText !== 'Location on file'
+                      ? ` • ${selectedReturn.customer.locationText}`
+                      : selectedReturn.customer.city && selectedReturn.customer.city !== 'Local Area'
+                      ? ` • ${selectedReturn.customer.city} ${selectedReturn.customer.pincode ? `(${selectedReturn.customer.pincode})` : ''}`
+                      : ''}
                   </div>
                 </div>
               </div>

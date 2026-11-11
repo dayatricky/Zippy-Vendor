@@ -50,6 +50,12 @@ export const getReturnEvidenceUrl = (itemId: string, filename: string): string =
 
   const backendBase = getBackendBaseUrl();
 
+  // If already a static uploads path (e.g. /uploads/returns/..., uploads/...)
+  if (trimmed.includes('/uploads/') || trimmed.startsWith('uploads/')) {
+    const clean = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return `${backendBase}${clean}`;
+  }
+
   // If already a full relative API path (e.g. /api/v1/vendor/returns/items/...)
   if (trimmed.startsWith('/api/') || trimmed.startsWith('api/')) {
     const clean = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
@@ -64,6 +70,49 @@ export const getReturnEvidenceUrl = (itemId: string, filename: string): string =
 
   const clean = trimmed.replace(/^\/+/, '');
   return `${API_BASE_URL}/vendor/returns/items/${itemId}/evidence/${encodeURIComponent(clean)}`;
+};
+
+export const VALID_BACKEND_RETURN_STATUSES = [
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'PICKUP_SCHEDULED',
+  'RECEIVED',
+  'INSPECTED',
+  'REPLACEMENT_ORDER_CREATED',
+  'COMPLETED',
+] as const;
+
+export const toBackendReturnStatus = (status: string): string => {
+  const s = String(status || '').trim().toUpperCase();
+  if ((VALID_BACKEND_RETURN_STATUSES as readonly string[]).includes(s)) return s;
+
+  if (['DOORSTEP_PICKUP', 'PICKUP_SCHEDULED', 'SCHEDULED'].includes(s)) {
+    return 'PICKUP_SCHEDULED';
+  }
+  if (['PICKED_UP', 'IN_TRANSIT', 'SHIPPED', 'PICKUP_COMPLETED', 'RECEIVED_AT_HUB'].includes(s)) {
+    return 'RECEIVED';
+  }
+  if (['INSPECTED'].includes(s)) {
+    return 'INSPECTED';
+  }
+  if (['REFUND_COMPLETED', 'REFUNDED', 'CLOSED'].includes(s)) {
+    return 'COMPLETED';
+  }
+  if (['EXCHANGE_DISPATCHED', 'REPLACEMENT_DISPATCHED'].includes(s)) {
+    return 'REPLACEMENT_ORDER_CREATED';
+  }
+  if (['PENDING_APPROVAL'].includes(s)) {
+    return 'PENDING';
+  }
+  if (['ACCEPTED'].includes(s)) {
+    return 'APPROVED';
+  }
+  if (['DECLINED', 'CANCELLED'].includes(s)) {
+    return 'REJECTED';
+  }
+
+  return s;
 };
 
 export interface VendorSignupPayload {
@@ -848,8 +897,9 @@ export const vendorApi = createApi({
     >({
       query: ({ itemId, returnId, ...body }) => {
         const targetId = itemId || returnId;
+        const validBackendStatus = toBackendReturnStatus(body.status);
         const payload: Record<string, any> = {
-          status: body.status,
+          status: validBackendStatus,
         };
         const rejectionReason =
           body.rejection_reason ||
@@ -859,10 +909,10 @@ export const vendorApi = createApi({
         // In Swagger schema:
         // status: "APPROVED" | "REJECTED"
         // rejection_reason: "The item is outside the return policy"
-        if (body.status === 'REJECTED') {
+        if (validBackendStatus === 'REJECTED') {
           payload.rejection_reason =
             rejectionReason || body.remarks || body.vendor_notes || 'The item is outside the return policy';
-        } else if (rejectionReason && body.status !== 'APPROVED') {
+        } else if (rejectionReason && validBackendStatus !== 'APPROVED') {
           payload.rejection_reason = rejectionReason;
         }
 
@@ -906,18 +956,19 @@ export const vendorApi = createApi({
     >({
       query: ({ itemId, returnId, ...body }) => {
         const targetId = itemId || returnId;
+        const validBackendStatus = toBackendReturnStatus(body.status);
         const payload: Record<string, any> = {
-          status: body.status,
+          status: validBackendStatus,
         };
         const rejectionReason =
           body.rejection_reason ||
           body.rejectionReason ||
           body.reason;
 
-        if (body.status === 'REJECTED') {
+        if (validBackendStatus === 'REJECTED') {
           payload.rejection_reason =
             rejectionReason || body.remarks || body.vendor_notes || 'The item is outside the return policy';
-        } else if (rejectionReason && body.status !== 'APPROVED') {
+        } else if (rejectionReason && validBackendStatus !== 'APPROVED') {
           payload.rejection_reason = rejectionReason;
         }
 
