@@ -152,6 +152,36 @@ export interface ReturnRequest {
   timeline: TimelineEvent[];
 }
 
+export function formatQuantityWithUnit(qty: number, rawUnit?: string): string {
+  const safeQty = Math.max(1, Number(qty) || 1);
+  const cleanUnit = (rawUnit || '').trim();
+
+  // If no unit or generic "unit" / "units"
+  if (!cleanUnit || /^(\d+\s*)?units?$/i.test(cleanUnit)) {
+    return `${safeQty} ${safeQty === 1 ? 'unit' : 'units'}`;
+  }
+
+  // If unit is "1 pc" or "pcs" or "pc"
+  if (/^(\d+\s*)?pcs?$/i.test(cleanUnit)) {
+    return `${safeQty} ${safeQty === 1 ? 'pc' : 'pcs'}`;
+  }
+
+  // If unit starts with 1 matching safeQty (e.g. qty: 1, unit: "1 kg" or "1 L")
+  // For qty = 1, "1 kg" -> "1 kg" (NOT "1 1 kg")
+  if (safeQty === 1 && /^\d+/.test(cleanUnit)) {
+    return cleanUnit;
+  }
+
+  // If safeQty > 1 and unit starts with a number (e.g. qty: 2, unit: "500 g" or "1 kg")
+  // Show "2 x 500 g" or "2 x 1 kg"
+  if (/^\d/.test(cleanUnit)) {
+    return `${safeQty} x ${cleanUnit}`;
+  }
+
+  // Otherwise, e.g. "kg", "g", "packet", "box"
+  return `${safeQty} ${cleanUnit}`;
+}
+
 const INITIAL_RETURNS: ReturnRequest[] = [
   {
     id: 'ret-1',
@@ -962,11 +992,29 @@ export default function ReturnsPage() {
         })
         .filter(Boolean);
 
+      const deepReturnQty = Number(
+        targetItem?.exchange_quantity ??
+        targetItem?.exchangeQuantity ??
+        targetItem?.return_quantity ??
+        targetItem?.returnQuantity ??
+        targetItem?.requested_quantity ??
+        targetItem?.requestedQuantity ??
+        detail?.exchange_quantity ??
+        detail?.return_quantity ??
+        detail?.requested_quantity ??
+        targetItem?.quantity ??
+        0
+      );
+
       setSelectedReturn((prev) => {
         if (!prev) return prev;
         const mergedImages = Array.from(new Set([...(prev.reason.images || []), ...additionalImages]));
         return {
           ...prev,
+          product: {
+            ...prev.product,
+            quantity: deepReturnQty > 0 ? deepReturnQty : prev.product.quantity,
+          },
           reason: {
             ...prev.reason,
             images: mergedImages.length > 0 ? mergedImages : prev.reason.images,
@@ -1080,26 +1128,67 @@ export default function ReturnsPage() {
             0
           );
 
-          const returnQty = Number(firstItem?.quantity ?? firstItem?.qty ?? 1);
-          const orderQty = Number(orderItem?.quantity ?? firstItem?.quantity ?? 1);
+          // Return / Exchange Requested Quantity
+          // Prioritize specific return/exchange quantity fields over total order quantity
+          const rawReturnQty =
+            firstItem?.exchange_quantity ??
+            firstItem?.exchangeQuantity ??
+            firstItem?.return_quantity ??
+            firstItem?.returnQuantity ??
+            firstItem?.requested_quantity ??
+            firstItem?.requestedQuantity ??
+            firstItem?.claim_quantity ??
+            r.exchange_quantity ??
+            r.exchangeQuantity ??
+            r.return_quantity ??
+            r.returnQuantity ??
+            r.requested_quantity ??
+            r.requestedQuantity ??
+            (Array.isArray(r.items) && r.items.length > 0 ? (firstItem?.quantity ?? firstItem?.qty) : null) ??
+            r.quantity ??
+            r.qty ??
+            firstItem?.quantity ??
+            firstItem?.qty ??
+            1;
+
+          const returnQty = Math.max(1, Number(rawReturnQty) || 1);
+
+          const rawOrderQty =
+            firstItem?.order_quantity ??
+            firstItem?.ordered_quantity ??
+            firstItem?.order_item?.quantity ??
+            firstItem?.orderItem?.quantity ??
+            orderItem?.quantity ??
+            orderItem?.qty ??
+            ord?.quantity ??
+            returnQty;
+
+          const orderQty = Math.max(returnQty, Number(rawOrderQty) || returnQty);
 
           const productTotal = Number(
             firstItem?.totalPrice ??
             firstItem?.total_price ??
+            firstItem?.claim_amount ??
+            firstItem?.claimAmount ??
             firstItem?.storeItem?.totalPrice ??
             firstItem?.storeItem?.total_price ??
-            orderItem.totalPrice ??
-            orderItem.total_price ??
             (unitPrice * returnQty)
           ) || (unitPrice * returnQty);
 
-          const productUnit = String(
+          // Clean up unit string - avoid falling back to `${orderQty} units` or `'1 unit'` which caused duplication
+          const rawUnitStr = String(
             firstItem?.unit ||
+            firstItem?.pack_size ||
             orderItem.unit ||
             orderItem.unit_type ||
             orderItem.weight ||
-            (orderQty > 1 ? `${orderQty} units` : '1 unit')
-          );
+            orderItem.pack_size ||
+            'unit'
+          ).trim();
+
+          const productUnit = (!rawUnitStr || /^(\d+\s*)?units?$/i.test(rawUnitStr))
+            ? 'unit'
+            : rawUnitStr;
 
           const productCategory = String(
             orderItem.category ||
@@ -1271,6 +1360,39 @@ export default function ReturnsPage() {
               status: orderStatus,
               createdAt: ord.createdAt,
             },
+            exchangeDetails: returnType === 'EXCHANGE' ? {
+              requestedItemName:
+                firstItem?.exchange_details?.requested_item_name ||
+                firstItem?.exchange_details?.requestedItemName ||
+                r.exchange_details?.requested_item_name ||
+                r.exchange_details?.requestedItemName ||
+                r.replacement_item ||
+                firstItem?.replacement_item ||
+                `Replacement for ${productName}`,
+              requestedVariant:
+                firstItem?.exchange_details?.requested_variant ||
+                firstItem?.exchange_details?.requestedVariant ||
+                r.exchange_details?.requested_variant ||
+                r.exchange_details?.requestedVariant ||
+                'Standard',
+              exchangeReason:
+                firstItem?.exchange_details?.exchange_reason ||
+                firstItem?.exchange_details?.exchangeReason ||
+                r.exchange_details?.exchange_reason ||
+                r.exchange_details?.exchangeReason ||
+                customerNotes ||
+                'Exchange requested by customer',
+              replacementTrackingNumber:
+                firstItem?.tracking_number ||
+                r.tracking_number ||
+                firstItem?.exchange_details?.replacementTrackingNumber ||
+                undefined,
+              replacementCourier:
+                firstItem?.courier_partner ||
+                r.courier_partner ||
+                firstItem?.exchange_details?.replacementCourier ||
+                undefined,
+            } : undefined,
             reason: {
               title: reasonStr,
               category: reasonCat,
@@ -2249,7 +2371,7 @@ export default function ReturnsPage() {
                           Price: ₹{item.product.unitPrice}
                         </span>
                         <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">
-                          Qty: {item.product.quantity} {item.product.unit}
+                          Qty: {formatQuantityWithUnit(item.product.quantity, item.product.unit)}
                         </span>
                         <span className="px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-black">
                           Total: ₹{item.product.totalPrice}
@@ -2372,7 +2494,7 @@ export default function ReturnsPage() {
                         <div className="flex justify-between items-center text-slate-600">
                           <span className="text-slate-500">Item Claim Value:</span>
                           <span className="font-bold text-slate-800">
-                            ₹{item.product.totalPrice} ({item.product.quantity} {item.product.unit})
+                            ₹{item.product.totalPrice} ({formatQuantityWithUnit(item.product.quantity, item.product.unit)})
                           </span>
                         </div>
                         {item.orderInfo?.totalAmount && (
@@ -2670,7 +2792,7 @@ export default function ReturnsPage() {
                   <div className="flex items-center gap-2 text-[11px] text-slate-500 flex-wrap">
                     <span>Rate: <strong className="text-slate-800">₹{selectedReturn.product.unitPrice}</strong></span>
                     <span>•</span>
-                    <span>Qty: <strong className="text-slate-800">{selectedReturn.product.quantity}</strong></span>
+                    <span>Qty: <strong className="text-slate-800">{formatQuantityWithUnit(selectedReturn.product.quantity, selectedReturn.product.unit)}</strong></span>
                     <span>•</span>
                     <span>Payable: <strong className="text-emerald-700 font-extrabold">₹{selectedReturn.product.totalPrice}</strong></span>
                   </div>
@@ -2998,7 +3120,7 @@ export default function ReturnsPage() {
               {/* Product Price Summary */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
                 <div className="flex justify-between items-center text-slate-600">
-                  <span>Product Claim Value ({selectedReturn.product.quantity}x @ ₹{selectedReturn.product.unitPrice}):</span>
+                  <span>Product Claim Value ({formatQuantityWithUnit(selectedReturn.product.quantity, selectedReturn.product.unit)} @ ₹{selectedReturn.product.unitPrice}):</span>
                   <span className="font-bold text-slate-800">₹{selectedReturn.product.totalPrice}</span>
                 </div>
                 {selectedReturn.orderInfo?.totalAmount && (
@@ -3227,7 +3349,7 @@ export default function ReturnsPage() {
                       <div className="font-extrabold text-slate-900">{selectedReturn.product.name}</div>
                       <div className="text-slate-500">SKU: {selectedReturn.product.sku}</div>
                       <div className="font-bold text-slate-800">
-                        ₹{selectedReturn.product.totalPrice} ({selectedReturn.product.quantity}x @ ₹{selectedReturn.product.unitPrice})
+                        ₹{selectedReturn.product.totalPrice} ({formatQuantityWithUnit(selectedReturn.product.quantity, selectedReturn.product.unit)} @ ₹{selectedReturn.product.unitPrice})
                       </div>
                     </div>
                   </div>
@@ -3268,8 +3390,8 @@ export default function ReturnsPage() {
                     <span className="font-extrabold text-slate-900 text-sm">₹{selectedReturn.product.unitPrice}</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 shadow-xs">
-                    <span className="text-[10px] text-slate-400 font-bold block">Return Quantity</span>
-                    <span className="font-extrabold text-slate-900 text-sm">{selectedReturn.product.quantity}</span>
+                    <span className="text-[10px] text-slate-400 font-bold block">{selectedReturn.type === 'EXCHANGE' ? 'Exchange Quantity' : 'Return Quantity'}</span>
+                    <span className="font-extrabold text-slate-900 text-sm">{formatQuantityWithUnit(selectedReturn.product.quantity, selectedReturn.product.unit)}</span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 shadow-xs">
                     <span className="text-[10px] text-emerald-700 font-bold block">Claim Item Value</span>
