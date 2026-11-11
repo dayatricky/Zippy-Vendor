@@ -2094,6 +2094,31 @@ export default function ProductsPage() {
           const targetName = String(payload.name || '').trim().toLowerCase();
           const targetSlug = String(payload.slug || '').trim().toLowerCase();
 
+          // Validate non-negative pricing
+          const payloadPrice = parseFloat(String(payload.selling_price ?? payload.price ?? payload.mrp));
+          const payloadMrp = parseFloat(String(payload.mrp));
+
+          if (String(payload.price).includes('-') || String(payload.selling_price).includes('-') || (!isNaN(payloadPrice) && payloadPrice < 0)) {
+            toast.error('Selling Price cannot be negative. Please enter a valid non-negative amount.');
+            throw new Error('Selling Price cannot be negative');
+          }
+          if (String(payload.mrp).includes('-') || (!isNaN(payloadMrp) && payloadMrp < 0)) {
+            toast.error('MRP cannot be negative. Please enter a valid non-negative amount.');
+            throw new Error('MRP cannot be negative');
+          }
+          if (isNaN(payloadPrice) || payloadPrice <= 0) {
+            toast.error('Selling Price must be greater than ₹0.');
+            throw new Error('Selling Price must be greater than 0');
+          }
+          if (isNaN(payloadMrp) || payloadMrp <= 0) {
+            toast.error('MRP must be greater than ₹0.');
+            throw new Error('MRP must be greater than 0');
+          }
+          if (payloadMrp < payloadPrice) {
+            toast.error(`Selling Price (₹${payloadPrice}) cannot exceed MRP (₹${payloadMrp}).`);
+            throw new Error('Selling Price cannot exceed MRP');
+          }
+
           // 1. Check if the product already exists in the vendor's catalog
           const existingInStore = displayProducts.find(
             (p: any) =>
@@ -2119,8 +2144,8 @@ export default function ProductsPage() {
             // Update local store for instant UI feedback
             addProduct({
               name: payload.name,
-              price: Number(payload.mrp) || 0,
-              mrp: Number(payload.mrp) || 0,
+              price: payloadPrice,
+              mrp: payloadMrp,
               category: categoriesList.find((c: any) => c.id === payload.category_id)?.name || 'Grocery',
               categoryId: payload.category_id,
               stock: Number(payload.stock_quantity) || 50,

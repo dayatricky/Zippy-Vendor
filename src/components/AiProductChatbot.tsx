@@ -58,6 +58,109 @@ const formatMessageTextWithRupees = (text?: string): string => {
   });
 };
 
+export const validateProductPricing = (product: { name?: string; price: any; mrp: any }): { valid: boolean; error?: string } => {
+  const name = product.name || 'Product';
+  const priceStr = String(product.price ?? '').trim();
+  const mrpStr = String(product.mrp ?? '').trim();
+
+  // 1. Negative checks
+  if (priceStr.includes('-') || (!isNaN(parseFloat(priceStr)) && parseFloat(priceStr) < 0)) {
+    return {
+      valid: false,
+      error: `Selling Price cannot be negative for "${name}". Please enter a valid non-negative amount.`,
+    };
+  }
+  if (mrpStr.includes('-') || (!isNaN(parseFloat(mrpStr)) && parseFloat(mrpStr) < 0)) {
+    return {
+      valid: false,
+      error: `MRP cannot be negative for "${name}". Please enter a valid non-negative amount.`,
+    };
+  }
+
+  // 2. Empty / Required checks
+  if (priceStr === '') {
+    return { valid: false, error: `Please enter a Selling Price for "${name}".` };
+  }
+  if (mrpStr === '') {
+    return { valid: false, error: `Please enter an MRP for "${name}".` };
+  }
+
+  const priceNum = parseFloat(priceStr);
+  const mrpNum = parseFloat(mrpStr);
+
+  // 3. Valid numerical checks
+  if (isNaN(priceNum)) {
+    return { valid: false, error: `Please enter a valid numerical Selling Price for "${name}".` };
+  }
+  if (isNaN(mrpNum)) {
+    return { valid: false, error: `Please enter a valid numerical MRP for "${name}".` };
+  }
+
+  // 4. Greater than zero
+  if (priceNum <= 0) {
+    return { valid: false, error: `Selling Price for "${name}" must be greater than ₹0.` };
+  }
+  if (mrpNum <= 0) {
+    return { valid: false, error: `MRP for "${name}" must be greater than ₹0.` };
+  }
+
+  // 5. Selling price cannot exceed MRP
+  if (mrpNum < priceNum) {
+    return {
+      valid: false,
+      error: `Selling Price (₹${priceNum}) cannot exceed MRP (₹${mrpNum}) for "${name}".`,
+    };
+  }
+
+  return { valid: true };
+};
+
+const handlePriceOrMrpChange = (
+  rawVal: string,
+  label: 'Selling Price' | 'MRP',
+  onValidChange: (val: string) => void
+) => {
+  // If user clears the input completely, allow it so zero or old value is removed cleanly
+  if (rawVal === '') {
+    onValidChange('');
+    return;
+  }
+
+  // Check if negative
+  if (rawVal.includes('-')) {
+    toast.error(`${label} cannot be negative. Please enter a valid non-negative amount.`);
+    const positivePart = rawVal.replace(/-/g, '');
+    onValidChange(positivePart);
+    return;
+  }
+
+  // Disallow +, e, E
+  let sanitized = rawVal.replace(/[+eE]/g, '');
+
+  // Strip leading zeroes if followed by digits (e.g. "0979" -> "979", "00" -> "0", keeping "0" and "0.xx")
+  if (/^0\d+/.test(sanitized)) {
+    sanitized = sanitized.replace(/^0+/, '') || '0';
+  }
+
+  const num = parseFloat(sanitized);
+  if (!isNaN(num) && num < 0) {
+    toast.error(`${label} cannot be negative. Please enter a valid non-negative amount.`);
+    onValidChange('');
+    return;
+  }
+
+  onValidChange(sanitized);
+};
+
+const handleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, label: string) => {
+  if (['-', '+', 'e', 'E'].includes(e.key)) {
+    e.preventDefault();
+    if (e.key === '-') {
+      toast.error(`${label} cannot be negative. Please enter a valid non-negative amount.`);
+    }
+  }
+};
+
 export interface AiSuggestedProduct {
   id?: string;
   name: string;
@@ -67,9 +170,9 @@ export interface AiSuggestedProduct {
   brand_name?: string;
   unit: string;
   pack_size: string;
-  mrp: number;
-  price: number;
-  stock_quantity: number;
+  mrp: number | string;
+  price: number | string;
+  stock_quantity: number | string;
   image_url: string;
   description: string;
   key_features?: string[];
@@ -79,6 +182,8 @@ export interface AiSuggestedProduct {
   status: string;
   isAdded?: boolean;
   selected?: boolean;
+  stock?: number | string;
+  source?: string;
 }
 
 interface ChatMessage {
@@ -394,13 +499,25 @@ export default function AiProductChatbot({
   const handleSaveFullProduct = () => {
     if (!editingProductData) return;
     const { msgId, prodIndex, product } = editingProductData;
+
+    const priceValidation = validateProductPricing(product);
+    if (!priceValidation.valid) {
+      toast.error(priceValidation.error || 'Invalid product pricing.');
+      return;
+    }
+
+    const priceNum = parseFloat(String(product.price));
+    const mrpNum = parseFloat(String(product.mrp));
+
     setMessages((prev) =>
       prev.map((msg) => {
         if (msg.id !== msgId || !msg.products) return msg;
         const updatedProds = [...msg.products];
         updatedProds[prodIndex] = {
           ...product,
-          price_range: `₹${product.price} - ₹${product.mrp}`,
+          price: priceNum,
+          mrp: mrpNum,
+          price_range: `₹${priceNum} - ₹${mrpNum}`,
         };
         return { ...msg, products: updatedProds };
       })
@@ -609,6 +726,14 @@ export default function AiProductChatbot({
           const cat = activeCategories.find((c) => c.id === value);
           if (cat) updatedProds[prodIndex].category_name = cat.name;
         }
+        // Auto update price_range display when price or mrp changes
+        if (field === 'price' || field === 'mrp') {
+          const p = field === 'price' ? value : updatedProds[prodIndex].price;
+          const m = field === 'mrp' ? value : updatedProds[prodIndex].mrp;
+          if (p !== '' || m !== '') {
+            updatedProds[prodIndex].price_range = `₹${p || 0} - ₹${m || 0}`;
+          }
+        }
         return { ...msg, products: updatedProds };
       })
     );
@@ -670,6 +795,17 @@ export default function AiProductChatbot({
       return;
     }
 
+    // Validate pricing
+    const priceValidation = validateProductPricing(product);
+    if (!priceValidation.valid) {
+      toast.error(priceValidation.error || 'Invalid product pricing.');
+      setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
+      return;
+    }
+
+    const priceNum = parseFloat(String(product.price));
+    const mrpNum = parseFloat(String(product.mrp));
+
     const payload = {
       ...(product.id ? { id: product.id } : {}),
       category_id: targetCatId,
@@ -681,8 +817,10 @@ export default function AiProductChatbot({
       barcode: product.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
       unit: product.unit || '1 kg',
       pack_size: product.pack_size || product.unit || '1 kg',
-      mrp: parseFloat(String(product.price ?? product.mrp)) || parseFloat(String(product.mrp)) || 0,
-      stock_quantity: parseInt(String(product.stock_quantity)) || 50,
+      mrp: mrpNum,
+      price: priceNum,
+      selling_price: priceNum,
+      stock_quantity: parseInt(String(product.stock_quantity), 10) || 50,
       images: product.image_url
         ? [{ image_url: product.image_url, display_order: 0, is_primary: true }]
         : [],
@@ -836,6 +974,15 @@ export default function AiProductChatbot({
       return;
     }
 
+    // Validate pricing on all selected products before proceeding
+    for (const p of selectedProducts) {
+      const priceValidation = validateProductPricing(p);
+      if (!priceValidation.valid) {
+        toast.error(priceValidation.error || 'Invalid product pricing in selected items.');
+        return;
+      }
+    }
+
     setBatchAdding(true);
     let successCount = 0;
     let failCount = 0;
@@ -859,6 +1006,9 @@ export default function AiProductChatbot({
         continue;
       }
 
+      const pPrice = parseFloat(String(p.price));
+      const pMrp = parseFloat(String(p.mrp));
+
       const payload = {
         category_id: targetCatId,
         name: p.name,
@@ -869,8 +1019,10 @@ export default function AiProductChatbot({
         barcode: p.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
         unit: p.unit || '1 kg',
         pack_size: p.pack_size || p.unit || '1 kg',
-        mrp: parseFloat(String(p.price ?? p.mrp)) || parseFloat(String(p.mrp)) || 0,
-        stock_quantity: parseInt(String(p.stock_quantity)) || 50,
+        mrp: pMrp,
+        price: pPrice,
+        selling_price: pPrice,
+        stock_quantity: parseInt(String(p.stock_quantity), 10) || 50,
         images: p.image_url
           ? [{ image_url: p.image_url, display_order: 0, is_primary: true }]
           : [],
@@ -1209,14 +1361,15 @@ export default function AiProductChatbot({
                                     </label>
                                     <input
                                       type="number"
-                                      value={prod.price}
+                                      min="0"
+                                      step="any"
+                                      placeholder="0"
+                                      value={prod.price !== undefined && prod.price !== null ? prod.price : ''}
                                       disabled={isProdInCatalog}
+                                      onKeyDown={(e) => handleNumberKeyDown(e, 'Selling Price')}
                                       onChange={(e) =>
-                                        handleProductFieldChange(
-                                          msg.id,
-                                          pIdx,
-                                          'price',
-                                          parseFloat(e.target.value) || 0
+                                        handlePriceOrMrpChange(e.target.value, 'Selling Price', (val) =>
+                                          handleProductFieldChange(msg.id, pIdx, 'price', val)
                                         )
                                       }
                                       className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden disabled:opacity-70 disabled:bg-slate-50"
@@ -1229,14 +1382,15 @@ export default function AiProductChatbot({
                                     </label>
                                     <input
                                       type="number"
-                                      value={prod.mrp}
+                                      min="0"
+                                      step="any"
+                                      placeholder="0"
+                                      value={prod.mrp !== undefined && prod.mrp !== null ? prod.mrp : ''}
                                       disabled={isProdInCatalog}
+                                      onKeyDown={(e) => handleNumberKeyDown(e, 'MRP')}
                                       onChange={(e) =>
-                                        handleProductFieldChange(
-                                          msg.id,
-                                          pIdx,
-                                          'mrp',
-                                          parseFloat(e.target.value) || 0
+                                        handlePriceOrMrpChange(e.target.value, 'MRP', (val) =>
+                                          handleProductFieldChange(msg.id, pIdx, 'mrp', val)
                                         )
                                       }
                                       className="w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-slate-600 focus:ring-1 focus:ring-emerald-500 outline-hidden disabled:opacity-70 disabled:bg-slate-50"
@@ -1250,16 +1404,34 @@ export default function AiProductChatbot({
                                     <div className="flex items-center gap-1">
                                       <input
                                         type="number"
-                                        value={prod.stock_quantity}
+                                        min="1"
+                                        placeholder="1"
+                                        value={prod.stock_quantity !== undefined && prod.stock_quantity !== null ? prod.stock_quantity : ''}
                                         disabled={isProdInCatalog}
-                                        onChange={(e) =>
+                                        onKeyDown={(e) => {
+                                          if (['-', '+', 'e', 'E', '.'].includes(e.key)) {
+                                            e.preventDefault();
+                                            if (e.key === '-') {
+                                              toast.error('Stock quantity cannot be negative.');
+                                            }
+                                          }
+                                        }}
+                                        onChange={(e) => {
+                                          let val = e.target.value;
+                                          if (val.includes('-')) {
+                                            val = val.replace(/-/g, '');
+                                            toast.error('Stock quantity cannot be negative.');
+                                          }
+                                          if (/^0\d+/.test(val)) {
+                                            val = val.replace(/^0+/, '') || '0';
+                                          }
                                           handleProductFieldChange(
                                             msg.id,
                                             pIdx,
                                             'stock_quantity',
-                                            parseInt(e.target.value) || 1
-                                          )
-                                        }
+                                            val
+                                          );
+                                        }}
                                         title="Stock count"
                                         className="w-1/2 text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium disabled:opacity-70 disabled:bg-slate-50"
                                       />
@@ -1738,12 +1910,18 @@ export default function AiProductChatbot({
                     <label className="block text-[10px] font-bold text-slate-500 uppercase">Selling Price (₹)</label>
                     <input
                       type="number"
-                      value={editingProductData.product.price}
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      value={editingProductData.product.price !== undefined && editingProductData.product.price !== null ? editingProductData.product.price : ''}
+                      onKeyDown={(e) => handleNumberKeyDown(e, 'Selling Price')}
                       onChange={(e) =>
-                        setEditingProductData({
-                          ...editingProductData,
-                          product: { ...editingProductData.product, price: parseFloat(e.target.value) || 0 },
-                        })
+                        handlePriceOrMrpChange(e.target.value, 'Selling Price', (val) =>
+                          setEditingProductData({
+                            ...editingProductData,
+                            product: { ...editingProductData.product, price: val },
+                          })
+                        )
                       }
                       className="w-full text-xs px-2 py-1 bg-white border border-emerald-200 rounded-md text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden"
                     />
@@ -1752,12 +1930,18 @@ export default function AiProductChatbot({
                     <label className="block text-[10px] font-bold text-slate-500 uppercase">MRP Price (₹)</label>
                     <input
                       type="number"
-                      value={editingProductData.product.mrp}
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      value={editingProductData.product.mrp !== undefined && editingProductData.product.mrp !== null ? editingProductData.product.mrp : ''}
+                      onKeyDown={(e) => handleNumberKeyDown(e, 'MRP')}
                       onChange={(e) =>
-                        setEditingProductData({
-                          ...editingProductData,
-                          product: { ...editingProductData.product, mrp: parseFloat(e.target.value) || 0 },
-                        })
+                        handlePriceOrMrpChange(e.target.value, 'MRP', (val) =>
+                          setEditingProductData({
+                            ...editingProductData,
+                            product: { ...editingProductData.product, mrp: val },
+                          })
+                        )
                       }
                       className="w-full text-xs px-2 py-1 bg-white border border-emerald-200 rounded-md text-slate-700 font-medium focus:ring-1 focus:ring-emerald-500 outline-hidden"
                     />
@@ -1898,15 +2082,21 @@ export default function AiProductChatbot({
                     <label className="block font-bold text-slate-700 mb-1">Selling Price (₹)</label>
                     <input
                       type="number"
-                      value={editingProductData.product.price}
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      value={editingProductData.product.price !== undefined && editingProductData.product.price !== null ? editingProductData.product.price : ''}
+                      onKeyDown={(e) => handleNumberKeyDown(e, 'Selling Price')}
                       onChange={(e) =>
-                        setEditingProductData({
-                          ...editingProductData,
-                          product: {
-                            ...editingProductData.product,
-                            price: parseFloat(e.target.value) || 0,
-                          },
-                        })
+                        handlePriceOrMrpChange(e.target.value, 'Selling Price', (val) =>
+                          setEditingProductData({
+                            ...editingProductData,
+                            product: {
+                              ...editingProductData.product,
+                              price: val,
+                            },
+                          })
+                        )
                       }
                       className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-emerald-700 font-bold focus:ring-1 focus:ring-emerald-500 outline-hidden"
                     />
@@ -1915,15 +2105,21 @@ export default function AiProductChatbot({
                     <label className="block font-bold text-slate-700 mb-1">MRP Price (₹)</label>
                     <input
                       type="number"
-                      value={editingProductData.product.mrp}
+                      min="0"
+                      step="any"
+                      placeholder="0"
+                      value={editingProductData.product.mrp !== undefined && editingProductData.product.mrp !== null ? editingProductData.product.mrp : ''}
+                      onKeyDown={(e) => handleNumberKeyDown(e, 'MRP')}
                       onChange={(e) =>
-                        setEditingProductData({
-                          ...editingProductData,
-                          product: {
-                            ...editingProductData.product,
-                            mrp: parseFloat(e.target.value) || 0,
-                          },
-                        })
+                        handlePriceOrMrpChange(e.target.value, 'MRP', (val) =>
+                          setEditingProductData({
+                            ...editingProductData,
+                            product: {
+                              ...editingProductData.product,
+                              mrp: val,
+                            },
+                          })
+                        )
                       }
                       className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-1 focus:ring-emerald-500 outline-hidden"
                     />
@@ -1936,16 +2132,34 @@ export default function AiProductChatbot({
                     <label className="block font-bold text-slate-700 mb-1">Stock Quantity</label>
                     <input
                       type="number"
-                      value={editingProductData.product.stock_quantity}
-                      onChange={(e) =>
+                      min="1"
+                      placeholder="1"
+                      value={editingProductData.product.stock_quantity !== undefined && editingProductData.product.stock_quantity !== null ? editingProductData.product.stock_quantity : ''}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E', '.'].includes(e.key)) {
+                          e.preventDefault();
+                          if (e.key === '-') {
+                            toast.error('Stock quantity cannot be negative.');
+                          }
+                        }
+                      }}
+                      onChange={(e) => {
+                        let val = e.target.value;
+                        if (val.includes('-')) {
+                          val = val.replace(/-/g, '');
+                          toast.error('Stock quantity cannot be negative.');
+                        }
+                        if (/^0\d+/.test(val)) {
+                          val = val.replace(/^0+/, '') || '0';
+                        }
                         setEditingProductData({
                           ...editingProductData,
                           product: {
                             ...editingProductData.product,
-                            stock_quantity: parseInt(e.target.value) || 0,
+                            stock_quantity: val,
                           },
-                        })
-                      }
+                        });
+                      }}
                       className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden"
                     />
                   </div>
