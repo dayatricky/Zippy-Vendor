@@ -333,6 +333,34 @@ export const formatReturnCustomerPhone = (r: any, ord: any, cust: any, rawAddr: 
   return 'Not provided';
 };
 
+export const formatReturnDate = (dateVal: any, fallback = 'Recently'): string => {
+  if (!dateVal) return fallback;
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+
+  const datePart = d.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+
+  const hours = d.getHours();
+  const minutes = d.getMinutes();
+
+  // If time is midnight 00:00 (often due to date-only database column), don't display 00:00
+  if (hours === 0 && minutes === 0) {
+    return datePart;
+  }
+
+  const timePart = d.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  return `${datePart}, ${timePart}`;
+};
+
 export const extractEvidenceList = (firstItem: any, r: any, rawReason: any, itemId: string): string[] => {
   const candidates: any[] = [];
 
@@ -1560,14 +1588,32 @@ export default function ReturnsPage() {
 
           const refundMode = paymentMethod === 'WALLET' ? 'STORE_WALLET' : paymentMethod === 'UPI' ? 'UPI' : 'ORIGINAL_PAYMENT';
 
+          const rawReviewedAt =
+            firstItem?.reviewed_at ||
+            firstItem?.reviewedAt ||
+            firstItem?.approved_at ||
+            firstItem?.approvedAt ||
+            r.reviewed_at ||
+            r.reviewedAt ||
+            r.approved_at ||
+            r.approvedAt ||
+            firstItem?.updated_at ||
+            r.updated_at;
+
+          const reviewedAtStr = rawReviewedAt ? formatReturnDate(rawReviewedAt) : undefined;
+          const requestedAtStr = formatReturnDate(
+            r.created_at || r.createdAt || r.requested_at || r.requestedAt || r.request_date || r.requestDate,
+            'Today'
+          );
+
           // Timeline
           const timeline: TimelineEvent[] = [];
-          if (firstItem?.reviewed_at) {
+          if (reviewedAtStr) {
             timeline.push({
               id: `tl-rev-${rIdx}-${itemIdx}`,
               title: status === 'APPROVED' ? 'Return Approved by Store' : 'Return Request Reviewed',
               description: status === 'APPROVED' ? 'Return request verified and approved. Pickup process initialized.' : `Status set to ${status}.`,
-              timestamp: new Date(firstItem.reviewed_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+              timestamp: reviewedAtStr,
               status,
               actor: 'VENDOR',
             });
@@ -1576,7 +1622,7 @@ export default function ReturnsPage() {
             id: `tl-init-${rIdx}-${itemIdx}`,
             title: 'Return Request Created',
             description: `Customer submitted return for ${productName} (Claim Value: ₹${productTotal}).`,
-            timestamp: r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recently',
+            timestamp: requestedAtStr,
             status: 'PENDING_APPROVAL',
             actor: 'CUSTOMER',
           });
@@ -1587,8 +1633,8 @@ export default function ReturnsPage() {
             itemId,
             returnNumber,
             orderId: orderNumber,
-            orderDate: ord.createdAt || r.order_date ? new Date(ord.createdAt || r.order_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent Order',
-            requestDate: r.created_at ? new Date(r.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Today',
+            orderDate: ord.createdAt || r.order_date ? formatReturnDate(ord.createdAt || r.order_date, 'Recent Order') : 'Recent Order',
+            requestDate: requestedAtStr,
             type: returnType,
             status,
             customer: {
@@ -1670,7 +1716,7 @@ export default function ReturnsPage() {
             },
             review: {
               rejectionReason: firstItem?.rejection_reason || r.rejection_reason || undefined,
-              reviewedAt: firstItem?.reviewed_at ? new Date(firstItem.reviewed_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : undefined,
+              reviewedAt: reviewedAtStr,
               reviewedBy: 'Store Partner',
             },
             timeline,
@@ -1785,7 +1831,7 @@ export default function ReturnsPage() {
           review: {
             ...item.review,
             vendorRemarks: approveForm.vendorNotes,
-            reviewedAt: new Date().toISOString(),
+            reviewedAt: formatReturnDate(new Date().toISOString()),
             reviewedBy: 'Store Partner',
           },
           timeline: [newTimelineEvent, ...item.timeline],
@@ -2308,16 +2354,55 @@ export default function ReturnsPage() {
           </button>
           <button
             onClick={() => {
+              const headers = [
+                'Return ID',
+                'Order ID',
+                'Customer Name',
+                'Customer Phone',
+                'Product Name',
+                'SKU',
+                'Claim Type',
+                'Status',
+                'Claim Amount (₹)',
+                'Requested Date',
+                'Approved / Action Date',
+              ];
+
+              const rows = returnsList.map((r) => {
+                let reqDate = r.requestDate || '';
+                if (reqDate.includes('00:00')) {
+                  reqDate = reqDate.replace(/,?\s*00:00(\s*[ap]m)?/i, '').trim();
+                }
+                if (!reqDate) reqDate = r.orderDate || 'Recent';
+
+                let approvedDate = '-';
+                if (['APPROVED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'INSPECTED', 'REFUND_COMPLETED', 'COMPLETED', 'EXCHANGE_DISPATCHED'].includes(r.status)) {
+                  approvedDate = r.review?.reviewedAt || r.timeline.find((t) => t.status === 'APPROVED')?.timestamp || reqDate;
+                  if (approvedDate.includes('00:00')) {
+                    approvedDate = approvedDate.replace(/,?\s*00:00(\s*[ap]m)?/i, '').trim();
+                  }
+                } else if (r.status === 'REJECTED') {
+                  approvedDate = r.review?.reviewedAt || r.timeline.find((t) => t.status === 'REJECTED')?.timestamp || 'Declined';
+                }
+
+                return [
+                  `"${r.returnNumber}"`,
+                  `"${r.orderId}"`,
+                  `"${r.customer.name}"`,
+                  `"${r.customer.phone}"`,
+                  `"${r.product.name.replace(/"/g, '""')}"`,
+                  `"${r.product.sku}"`,
+                  `"${r.type}"`,
+                  `"${r.status}"`,
+                  `"${r.refund.amount}"`,
+                  `"${reqDate}"`,
+                  `"${approvedDate}"`,
+                ].join(',');
+              });
+
               const csvContent =
                 'data:text/csv;charset=utf-8,' +
-                ['Return ID,Order ID,Customer,Product,Type,Status,Amount,Requested Date']
-                  .concat(
-                    returnsList.map(
-                      (r) =>
-                        `"${r.returnNumber}","${r.orderId}","${r.customer.name}","${r.product.name}","${r.type}","${r.status}","${r.refund.amount}","${r.requestDate}"`
-                    )
-                  )
-                  .join('\n');
+                [headers.join(','), ...rows].join('\n');
               const encodedUri = encodeURI(csvContent);
               const link = document.createElement('a');
               link.setAttribute('href', encodedUri);
@@ -2636,15 +2721,24 @@ export default function ReturnsPage() {
                 <div className="p-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
                   {/* Left Column: Product & Exchange Info (4 cols) */}
                   <div className="lg:col-span-4 flex items-start space-x-3.5">
-                    <img
-                      src={item.product.image}
-                      alt={item.product.name}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src =
-                          getAccurateProductImage(item.product.name, item.product.category);
-                      }}
-                      className="w-20 h-20 rounded-2xl object-cover border border-slate-200 shrink-0 bg-slate-50 shadow-xs"
-                    />
+                    <div
+                      onClick={() => setLightboxImage(item.product.image)}
+                      className="relative group cursor-pointer shrink-0 overflow-hidden rounded-2xl"
+                      title="Click to enlarge product image"
+                    >
+                      <img
+                        src={item.product.image}
+                        alt={item.product.name}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src =
+                            getAccurateProductImage(item.product.name, item.product.category);
+                        }}
+                        className="w-20 h-20 rounded-2xl object-cover border border-slate-200 bg-slate-50 shadow-xs group-hover:scale-105 transition-transform"
+                      />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white pointer-events-none">
+                        <Maximize2 className="w-4 h-4" />
+                      </div>
+                    </div>
                     <div className="space-y-1.5 min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
@@ -3680,15 +3774,24 @@ export default function ReturnsPage() {
                     Product Details
                   </span>
                   <div className="flex items-start space-x-3">
-                    <img
-                      src={selectedReturn.product.image}
-                      alt={selectedReturn.product.name}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src =
-                          getAccurateProductImage(selectedReturn.product.name, selectedReturn.product.category);
-                      }}
-                      className="w-14 h-14 rounded-xl object-cover border border-slate-200 shrink-0"
-                    />
+                    <div
+                      onClick={() => setLightboxImage(selectedReturn.product.image)}
+                      className="relative group cursor-pointer shrink-0 overflow-hidden rounded-xl"
+                      title="Click to enlarge product image"
+                    >
+                      <img
+                        src={selectedReturn.product.image}
+                        alt={selectedReturn.product.name}
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src =
+                            getAccurateProductImage(selectedReturn.product.name, selectedReturn.product.category);
+                        }}
+                        className="w-14 h-14 rounded-xl object-cover border border-slate-200 group-hover:scale-105 transition-transform"
+                      />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white pointer-events-none">
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
                     <div className="space-y-0.5 text-xs">
                       <div className="font-extrabold text-slate-900">{selectedReturn.product.name}</div>
                       <div className="text-slate-500">SKU: {selectedReturn.product.sku}</div>

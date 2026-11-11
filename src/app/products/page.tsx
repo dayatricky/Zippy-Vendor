@@ -1750,13 +1750,18 @@ export default function ProductsPage() {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Category *</label>
                   <select
-                    value={newProduct.categoryId || newProduct.categoryName || categoriesList[0]?.id || categoriesList[0]?.name || ''}
+                    value={
+                      categoriesList.find((c: any) => c.id === newProduct.categoryId)?.id ||
+                      categoriesList.find((c: any) => c.name.toLowerCase() === (newProduct.categoryName || '').toLowerCase())?.id ||
+                      categoriesList[0]?.id || ''
+                    }
                     onChange={(e) => {
-                      const catObj = categoriesList.find((c: any) => c.id === e.target.value || c.name === e.target.value);
+                      const selectedVal = e.target.value;
+                      const catObj = categoriesList.find((c: any) => c.id === selectedVal || c.name === selectedVal);
                       setNewProduct({
                         ...newProduct,
-                        categoryId: catObj?.id || e.target.value,
-                        categoryName: catObj?.name || e.target.value,
+                        categoryId: catObj?.id || selectedVal,
+                        categoryName: catObj?.name || '',
                       });
                     }}
                     className="custom-input w-full px-4 py-2 text-sm bg-white text-slate-800"
@@ -1978,13 +1983,18 @@ export default function ProductsPage() {
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Category *</label>
                   <select
-                    value={newProduct.categoryId || newProduct.categoryName || categoriesList[0]?.id || categoriesList[0]?.name || ''}
+                    value={
+                      categoriesList.find((c: any) => c.id === newProduct.categoryId)?.id ||
+                      categoriesList.find((c: any) => c.name.toLowerCase() === (newProduct.categoryName || '').toLowerCase())?.id ||
+                      categoriesList[0]?.id || ''
+                    }
                     onChange={(e) => {
-                      const catObj = categoriesList.find((c: any) => c.id === e.target.value || c.name === e.target.value);
+                      const selectedVal = e.target.value;
+                      const catObj = categoriesList.find((c: any) => c.id === selectedVal || c.name === selectedVal);
                       setNewProduct({
                         ...newProduct,
-                        categoryId: catObj?.id || e.target.value,
-                        categoryName: catObj?.name || e.target.value,
+                        categoryId: catObj?.id || selectedVal,
+                        categoryName: catObj?.name || '',
                       });
                     }}
                     className="custom-input w-full px-4 py-2 text-sm bg-white text-slate-800"

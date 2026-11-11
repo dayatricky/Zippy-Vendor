@@ -25,6 +25,7 @@ import {
   useUpdateCategoryMutation,
   useDeleteCategoryMutation,
   useUploadCategoryImageMutation,
+  refreshVendorToken,
 } from '@/store/api/vendorApi';
 import ImageUploadField from '@/components/ImageUploadField';
 import { resolveImageUrl } from '@/utils/imageUrl';
@@ -166,14 +167,36 @@ export default function CategoriesPage() {
     }
 
     try {
-      const createRes = await addCategoryApi({
-        name: newCat.name,
-        slug: newCat.slug || newCat.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        description: newCat.description || 'Grocery and daily store items category.',
-        image_url: newCat.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
-        display_order: 1,
-        status: newCat.isActive ? 'ACTIVE' : 'INACTIVE',
-      }).unwrap();
+      let createRes: any = null;
+      try {
+        createRes = await addCategoryApi({
+          name: newCat.name,
+          slug: newCat.slug || newCat.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          description: newCat.description || 'Grocery and daily store items category.',
+          image_url: newCat.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+          display_order: 1,
+          status: newCat.isActive ? 'ACTIVE' : 'INACTIVE',
+        }).unwrap();
+      } catch (firstErr: any) {
+        const errStr = String(firstErr?.data?.msg || firstErr?.data?.message || firstErr?.message || '').toLowerCase();
+        if (errStr.includes('token') || errStr.includes('auth') || errStr.includes('unauthorized') || firstErr?.status === 401) {
+          const newToken = await refreshVendorToken();
+          if (newToken) {
+            createRes = await addCategoryApi({
+              name: newCat.name,
+              slug: newCat.slug || newCat.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+              description: newCat.description || 'Grocery and daily store items category.',
+              image_url: newCat.image || 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=400&q=80',
+              display_order: 1,
+              status: newCat.isActive ? 'ACTIVE' : 'INACTIVE',
+            }).unwrap();
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
 
       const createdCatId = createRes?.data?.id || createRes?.data?._id || (createRes as any)?.id || '';
 

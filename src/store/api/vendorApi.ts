@@ -191,13 +191,52 @@ const rawBaseQuery = fetchBaseQuery({
   prepareHeaders: (headers) => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('zippy_vendor_token');
-      if (token) {
+      if (token && !headers.has('authorization')) {
         headers.set('authorization', `Bearer ${token}`);
       }
     }
     return headers;
   },
 });
+
+export const refreshVendorToken = async (): Promise<string | null> => {
+  if (typeof window === 'undefined') return null;
+  const refreshToken = localStorage.getItem('zippy_vendor_refresh_token');
+  if (!refreshToken) return null;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/vendor/auth/refresh-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refreshToken }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const dataPayload = data?.data || data;
+      const newAccessToken =
+        dataPayload?.accessToken ||
+        dataPayload?.token ||
+        data?.accessToken ||
+        data?.token;
+      const newRefreshToken =
+        dataPayload?.refreshToken || data?.refreshToken;
+
+      if (newAccessToken) {
+        localStorage.setItem('zippy_vendor_token', newAccessToken);
+        if (newRefreshToken) {
+          localStorage.setItem('zippy_vendor_refresh_token', newRefreshToken);
+        }
+        return newAccessToken;
+      }
+    }
+  } catch (err) {
+    console.warn('Direct vendor token refresh error:', err);
+  }
+  return null;
+};
 
 const notifySessionExpired = (message: string) => {
   if (typeof window !== 'undefined') {
@@ -229,8 +268,16 @@ const baseQueryWithReauth: BaseQueryFn<
   const errorData = result.error?.data as any;
   const errorMsg = String(errorData?.msg || errorData?.message || errorData?.error || '').toLowerCase();
 
+  const resData = result.data as any;
+  const isDataExpired =
+    resData?.error === true &&
+    (String(resData?.msg || resData?.message || '').toLowerCase().includes('token has expired') ||
+      String(resData?.msg || resData?.message || '').toLowerCase().includes('token expired') ||
+      String(resData?.msg || resData?.message || '').toLowerCase().includes('unauthorized'));
+
   const isTokenExpired =
     status === 401 ||
+    isDataExpired ||
     errorMsg.includes('token has expired') ||
     errorMsg.includes('jwt expired') ||
     errorMsg.includes('token expired') ||
@@ -238,48 +285,12 @@ const baseQueryWithReauth: BaseQueryFn<
     errorMsg.includes('invalid token');
 
   if (isTokenExpired) {
-    if (typeof window !== 'undefined') {
-      const refreshToken = localStorage.getItem('zippy_vendor_refresh_token');
-      if (refreshToken) {
-        try {
-          const refreshResult = await rawBaseQuery(
-            {
-              url: '/vendor/auth/refresh-token',
-              method: 'POST',
-              body: { refreshToken },
-            },
-            api,
-            extraOptions
-          );
-
-          const refreshData = refreshResult.data as any;
-          const dataPayload = refreshData?.data || refreshData;
-          const newAccessToken =
-            dataPayload?.accessToken ||
-            dataPayload?.token ||
-            refreshData?.accessToken ||
-            refreshData?.token;
-          const newRefreshToken =
-            dataPayload?.refreshToken ||
-            refreshData?.refreshToken;
-
-          if (newAccessToken) {
-            localStorage.setItem('zippy_vendor_token', newAccessToken);
-            if (newRefreshToken) {
-              localStorage.setItem('zippy_vendor_refresh_token', newRefreshToken);
-            }
-            // Retry the original query with the refreshed access token
-            result = await rawBaseQuery(args, api, extraOptions);
-          } else {
-            notifySessionExpired('Authentication token has expired. Please log in again to continue.');
-          }
-        } catch (refreshErr) {
-          console.error('Auto token refresh failed in RTK Query:', refreshErr);
-          notifySessionExpired('Authentication token has expired. Please log in again to continue.');
-        }
-      } else {
-        notifySessionExpired('Authentication token has expired. Please log in again to continue.');
-      }
+    const newAccessToken = await refreshVendorToken();
+    if (newAccessToken) {
+      // Retry the original query with the refreshed access token
+      result = await rawBaseQuery(args, api, extraOptions);
+    } else {
+      notifySessionExpired('Authentication token has expired. Please log in again to continue.');
     }
   }
 

@@ -270,9 +270,11 @@ export const validateProductForRegistration = (
 export interface AiSuggestedProduct {
   id?: string;
   name: string;
+  product_name?: string;
   slug: string;
   category_id?: string;
   category_name?: string;
+  category?: string;
   brand_name?: string;
   unit: string;
   pack_size: string;
@@ -1608,12 +1610,19 @@ export default function AiProductChatbot({
                                       value={
                                         prod.category_id && activeCategories.some((c) => c.id === prod.category_id)
                                           ? prod.category_id
-                                          : activeCategories[0]?.id || ''
+                                          : activeCategories.find((c) => c.name.toLowerCase() === (prod.category_name || prod.category || '').toLowerCase())?.id ||
+                                            activeCategories.find((c) => (prod.name || '').toLowerCase().includes(c.name.toLowerCase()))?.id ||
+                                            activeCategories[0]?.id || ''
                                       }
                                       disabled={isProdInCatalog}
-                                      onChange={(e) =>
-                                        handleProductFieldChange(msg.id, pIdx, 'category_id', e.target.value)
-                                      }
+                                      onChange={(e) => {
+                                        const chosenId = e.target.value;
+                                        const chosenCat = activeCategories.find((c) => c.id === chosenId);
+                                        handleProductFieldChange(msg.id, pIdx, 'category_id', chosenId);
+                                        if (chosenCat) {
+                                          handleProductFieldChange(msg.id, pIdx, 'category_name', chosenCat.name);
+                                        }
+                                      }}
                                       className="w-full text-xs bg-white border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:ring-1 focus:ring-emerald-500 outline-hidden font-medium disabled:opacity-70 disabled:bg-slate-50"
                                     >
                                       {activeCategories.length > 0 ? (
@@ -2327,7 +2336,13 @@ export default function AiProductChatbot({
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Category</label>
                   <select
-                    value={editingProductData.product.category_id || activeCategories[0]?.id || ''}
+                    value={
+                      editingProductData.product.category_id && activeCategories.some((c) => c.id === editingProductData.product.category_id)
+                        ? editingProductData.product.category_id
+                        : activeCategories.find((c) => c.name.toLowerCase() === (editingProductData.product.category_name || editingProductData.product.category || '').toLowerCase())?.id ||
+                          activeCategories.find((c) => (editingProductData.product.name || '').toLowerCase().includes(c.name.toLowerCase()))?.id ||
+                          activeCategories[0]?.id || ''
+                    }
                     onChange={(e) => {
                       const selectedCat = activeCategories.find((c) => c.id === e.target.value);
                       setEditingProductData({
@@ -2336,6 +2351,7 @@ export default function AiProductChatbot({
                           ...editingProductData.product,
                           category_id: e.target.value,
                           category_name: selectedCat?.name || editingProductData.product.category_name,
+                          category: selectedCat?.name || editingProductData.product.category,
                         },
                       });
                     }}
