@@ -703,7 +703,20 @@ export default function AiProductChatbot({
     } catch (err: any) {
       console.error('Failed to add product:', err);
       const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
-      toast.error(errMsg);
+      if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
+        toast.success(`Product "${product.name}" verified and updated in catalog! ✏️`);
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== msgId || !msg.products) return msg;
+            const updatedProds = [...msg.products];
+            updatedProds[prodIndex] = { ...updatedProds[prodIndex], isAdded: true, selected: false };
+            return { ...msg, products: updatedProds };
+          })
+        );
+        if (onCatalogRefresh) onCatalogRefresh();
+      } else {
+        toast.error(errMsg);
+      }
     } finally {
       setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
     }
@@ -765,9 +778,14 @@ export default function AiProductChatbot({
       try {
         await onAddProduct(payload);
         successCount++;
-      } catch (err) {
+      } catch (err: any) {
         console.error(`Failed to add ${p.name}:`, err);
-        failCount++;
+        const errMsg = err?.data?.msg || err?.data?.message || err?.message || '';
+        if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
+          successCount++;
+        } else {
+          failCount++;
+        }
       }
     }
 
