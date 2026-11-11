@@ -161,6 +161,112 @@ const handleNumberKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, label: st
   }
 };
 
+export const extractErrorMessage = (err: any): string => {
+  if (!err) return 'Unknown error';
+  const data = err?.data;
+  if (data) {
+    if (Array.isArray(data.message) && data.message.length > 0) {
+      return data.message.filter(Boolean).join('. ');
+    }
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return data.message;
+    }
+    if (typeof data.msg === 'string' && data.msg.trim()) {
+      return data.msg;
+    }
+    if (typeof data.error === 'string' && data.error.trim()) {
+      return data.error;
+    }
+  }
+  if (err?.message && typeof err.message === 'string' && err.message.trim()) {
+    return err.message;
+  }
+  return 'Failed to add product. Please check all fields.';
+};
+
+export const resolveCategoryForProduct = (
+  product: { category_id?: string; category_name?: string },
+  activeCategories: Array<{ id: string; name: string }>
+): { catId: string; catName: string } | null => {
+  if (!activeCategories || activeCategories.length === 0) return null;
+
+  // 1. Direct ID match
+  if (product.category_id) {
+    const direct = activeCategories.find((c) => c.id === product.category_id);
+    if (direct) return { catId: direct.id, catName: direct.name };
+  }
+
+  // 2. Name match (case-insensitive)
+  if (product.category_name) {
+    const byName = activeCategories.find(
+      (c) => c.name.trim().toLowerCase() === product.category_name!.trim().toLowerCase()
+    );
+    if (byName) return { catId: byName.id, catName: byName.name };
+  }
+
+  // 3. Check if category_id was assigned a category name string (e.g. "apples")
+  if (product.category_id) {
+    const byIdAsName = activeCategories.find(
+      (c) => c.name.trim().toLowerCase() === String(product.category_id).trim().toLowerCase()
+    );
+    if (byIdAsName) return { catId: byIdAsName.id, catName: byIdAsName.name };
+  }
+
+  // 4. Fallback to any valid UUID category
+  const uuidCat = activeCategories.find((c) => isUUID(c.id));
+  if (uuidCat) return { catId: uuidCat.id, catName: uuidCat.name };
+
+  // 5. Fallback to the first available category
+  if (activeCategories[0]?.id) {
+    return { catId: activeCategories[0].id, catName: activeCategories[0].name };
+  }
+
+  return null;
+};
+
+export const validateProductForRegistration = (
+  p: AiSuggestedProduct,
+  activeCategories: Array<{ id: string; name: string }>
+): { valid: boolean; error?: string; resolvedCategory?: { catId: string; catName: string } } => {
+  // 1. Title validation
+  if (!p.name || !p.name.trim()) {
+    return { valid: false, error: 'Product title is required.' };
+  }
+
+  // 2. Category validation
+  if (!activeCategories || activeCategories.length === 0) {
+    return {
+      valid: false,
+      error: `No categories found in store. Please create at least one category before registering "${p.name}".`,
+    };
+  }
+
+  const resolved = resolveCategoryForProduct(p, activeCategories);
+  if (!resolved || !resolved.catId) {
+    return {
+      valid: false,
+      error: `Category is missing or invalid for "${p.name}". Please select a valid store category.`,
+    };
+  }
+
+  // 3. Pricing validation
+  const priceValidation = validateProductPricing(p);
+  if (!priceValidation.valid) {
+    return { valid: false, error: priceValidation.error };
+  }
+
+  // 4. Stock count validation
+  const stockNum = parseInt(String(p.stock_quantity), 10);
+  if (isNaN(stockNum) || stockNum < 1) {
+    return {
+      valid: false,
+      error: `Stock quantity for "${p.name}" must be at least 1.`,
+    };
+  }
+
+  return { valid: true, resolvedCategory: resolved };
+};
+
 export interface AiSuggestedProduct {
   id?: string;
   name: string;
@@ -773,61 +879,17 @@ export default function AiProductChatbot({
       return;
     }
 
+    // 1. Validate fields with specific, clear messages
+    const validation = validateProductForRegistration(product, activeCategories);
+    if (!validation.valid || !validation.resolvedCategory) {
+      toast.error(validation.error || `Please resolve validation issues for "${product.name}".`);
+      return;
+    }
+
     const itemKey = `${msgId}-${prodIndex}`;
     setAddingIds((prev) => ({ ...prev, [itemKey]: true }));
 
-    // Resolve category matching Category API
-    let targetCatId = product.category_id;
-    const catObj = activeCategories.find((c) => c.id === targetCatId || c.name === product.category_name) || activeCategories[0];
-    if (catObj) {
-      targetCatId = catObj.id;
-    }
-    if (!isUUID(targetCatId)) {
-      const validUuidCat = activeCategories.find((c) => isUUID(c.id));
-      if (validUuidCat) {
-        targetCatId = validUuidCat.id;
-      }
-    }
-
-    if (!targetCatId) {
-      toast.error('Please create at least one category before adding products.');
-      setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
-      return;
-    }
-
-    // Validate pricing
-    const priceValidation = validateProductPricing(product);
-    if (!priceValidation.valid) {
-      toast.error(priceValidation.error || 'Invalid product pricing.');
-      setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
-      return;
-    }
-
-    const priceNum = parseFloat(String(product.price));
-    const mrpNum = parseFloat(String(product.mrp));
-
-    const payload = {
-      ...(product.id ? { id: product.id } : {}),
-      category_id: targetCatId,
-      name: product.name,
-      slug: product.slug || product.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
-      description: product.description || product.name,
-      brand_name: product.brand_name || 'Generic',
-      sku: product.sku || `SKU-${Date.now()}`,
-      barcode: product.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
-      unit: product.unit || '1 kg',
-      pack_size: product.pack_size || product.unit || '1 kg',
-      mrp: mrpNum,
-      price: priceNum,
-      selling_price: priceNum,
-      stock_quantity: parseInt(String(product.stock_quantity), 10) || 50,
-      images: product.image_url
-        ? [{ image_url: product.image_url, display_order: 0, is_primary: true }]
-        : [],
-      status: 'ACTIVE',
-    };
-
-    // Check if product already exists in vendor's catalog
+    // 2. Check if product already exists in vendor's catalog
     const isAlreadyCreated = Boolean(
       product.isAdded ||
       existingProducts.some(
@@ -855,8 +917,33 @@ export default function AiProductChatbot({
       return;
     }
 
+    const priceNum = parseFloat(String(product.price));
+    const mrpNum = parseFloat(String(product.mrp));
+    const stockNum = parseInt(String(product.stock_quantity), 10) || 50;
+
+    const payload = {
+      ...(product.id ? { id: product.id } : {}),
+      category_id: validation.resolvedCategory.catId,
+      name: product.name.trim(),
+      slug: product.slug || product.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
+      description: product.description || product.name,
+      brand_name: product.brand_name || 'Generic',
+      sku: product.sku || `SKU-${Date.now()}`,
+      barcode: product.barcode || `${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+      unit: product.unit || '1 kg',
+      pack_size: product.pack_size || product.unit || '1 kg',
+      mrp: mrpNum,
+      price: priceNum,
+      selling_price: priceNum,
+      stock_quantity: stockNum,
+      images: product.image_url
+        ? [{ image_url: product.image_url, display_order: 0, is_primary: true }]
+        : [],
+      status: 'ACTIVE',
+    };
+
     try {
-      const res = await onAddProduct(payload);
+      await onAddProduct(payload);
 
       // Mark as added in UI
       setMessages((prev) =>
@@ -871,15 +958,15 @@ export default function AiProductChatbot({
       if (onCatalogRefresh) onCatalogRefresh();
     } catch (err: any) {
       console.error('Failed to add product:', err);
-      const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
+      const errDetail = extractErrorMessage(err);
       const status = err?.status || err?.originalStatus;
       const isTokenExpired =
         status === 401 ||
-        String(errMsg).toLowerCase().includes('token has expired') ||
-        String(errMsg).toLowerCase().includes('token expired') ||
-        String(errMsg).toLowerCase().includes('jwt expired') ||
-        String(errMsg).toLowerCase().includes('unauthorized') ||
-        String(errMsg).toLowerCase().includes('invalid token');
+        errDetail.toLowerCase().includes('token has expired') ||
+        errDetail.toLowerCase().includes('token expired') ||
+        errDetail.toLowerCase().includes('jwt expired') ||
+        errDetail.toLowerCase().includes('unauthorized') ||
+        errDetail.toLowerCase().includes('invalid token');
 
       if (isTokenExpired) {
         // 1. Try refreshing token automatically
@@ -940,7 +1027,7 @@ export default function AiProductChatbot({
         return;
       }
 
-      if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
+      if (errDetail.toLowerCase().includes('already exists') || errDetail.toLowerCase().includes('exist')) {
         toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
           duration: 5000,
           icon: 'ℹ️',
@@ -955,7 +1042,7 @@ export default function AiProductChatbot({
         );
         if (onCatalogRefresh) onCatalogRefresh();
       } else {
-        toast.error(errMsg);
+        toast.error(`Could not register "${product.name}": ${errDetail}`);
       }
     } finally {
       setAddingIds((prev) => ({ ...prev, [itemKey]: false }));
@@ -974,44 +1061,67 @@ export default function AiProductChatbot({
       return;
     }
 
-    // Validate pricing on all selected products before proceeding
+    // 1. Pre-validate EVERY selected product and identify any missing or invalid field immediately!
     for (const p of selectedProducts) {
-      const priceValidation = validateProductPricing(p);
-      if (!priceValidation.valid) {
-        toast.error(priceValidation.error || 'Invalid product pricing in selected items.');
+      const validation = validateProductForRegistration(p, activeCategories);
+      if (!validation.valid) {
+        toast.error(validation.error || `Please resolve validation issues for "${p.name}".`);
         return;
       }
     }
 
     setBatchAdding(true);
     let successCount = 0;
-    let failCount = 0;
+    const addedProductNames: string[] = [];
 
     for (let i = 0; i < selectedProducts.length; i++) {
       const p = selectedProducts[i];
-      let targetCatId = p.category_id;
-      const catObj = activeCategories.find((c) => c.id === targetCatId || c.name === p.category_name) || activeCategories[0];
-      if (catObj) {
-        targetCatId = catObj.id;
-      }
-      if (!isUUID(targetCatId)) {
-        const validUuidCat = activeCategories.find((c) => isUUID(c.id));
-        if (validUuidCat) {
-          targetCatId = validUuidCat.id;
-        }
+
+      // Check if product already exists in vendor's catalog
+      const isAlreadyCreated = Boolean(
+        p.isAdded ||
+        existingProducts.some(
+          (ep: any) =>
+            (p.id && ep.id === p.id) ||
+            (ep.name && ep.name.trim().toLowerCase() === p.name.trim().toLowerCase()) ||
+            (p.slug && ep.slug && ep.slug.trim().toLowerCase() === p.slug.trim().toLowerCase())
+        )
+      );
+
+      if (isAlreadyCreated) {
+        toast(`Product "${p.name}" is already created in your catalog. Please edit it from the Product List.`, {
+          duration: 5000,
+          icon: 'ℹ️',
+        });
+        // Mark as added in UI
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== msgId || !msg.products) return msg;
+            const updatedProds = msg.products.map((prod) =>
+              prod.name.trim().toLowerCase() === p.name.trim().toLowerCase()
+                ? { ...prod, isAdded: true, selected: false }
+                : prod
+            );
+            return { ...msg, products: updatedProds };
+          })
+        );
+        successCount++;
+        continue;
       }
 
-      if (!targetCatId) {
-        failCount++;
+      const validation = validateProductForRegistration(p, activeCategories);
+      if (!validation.valid || !validation.resolvedCategory) {
+        toast.error(validation.error || `Invalid field in product "${p.name}".`);
         continue;
       }
 
       const pPrice = parseFloat(String(p.price));
       const pMrp = parseFloat(String(p.mrp));
+      const stockNum = parseInt(String(p.stock_quantity), 10) || 50;
 
       const payload = {
-        category_id: targetCatId,
-        name: p.name,
+        category_id: validation.resolvedCategory.catId,
+        name: p.name.trim(),
         slug: p.slug || p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
         description: p.description || p.name,
         brand_name: p.brand_name || 'Generic',
@@ -1022,7 +1132,7 @@ export default function AiProductChatbot({
         mrp: pMrp,
         price: pPrice,
         selling_price: pPrice,
-        stock_quantity: parseInt(String(p.stock_quantity), 10) || 50,
+        stock_quantity: stockNum,
         images: p.image_url
           ? [{ image_url: p.image_url, display_order: 0, is_primary: true }]
           : [],
@@ -1032,17 +1142,72 @@ export default function AiProductChatbot({
       try {
         await onAddProduct(payload);
         successCount++;
+        addedProductNames.push(p.name);
+
+        // Mark as added in UI
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== msgId || !msg.products) return msg;
+            const updatedProds = msg.products.map((prod) =>
+              prod.name.trim().toLowerCase() === p.name.trim().toLowerCase()
+                ? { ...prod, isAdded: true, selected: false }
+                : prod
+            );
+            return { ...msg, products: updatedProds };
+          })
+        );
       } catch (err: any) {
         console.error(`Failed to add ${p.name}:`, err);
-        const errMsg = err?.data?.msg || err?.data?.message || err?.message || '';
+        const errDetail = extractErrorMessage(err);
         const status = err?.status || err?.originalStatus;
         const isTokenExpired =
           status === 401 ||
-          String(errMsg).toLowerCase().includes('token has expired') ||
-          String(errMsg).toLowerCase().includes('token expired') ||
-          String(errMsg).toLowerCase().includes('unauthorized');
+          errDetail.toLowerCase().includes('token has expired') ||
+          errDetail.toLowerCase().includes('token expired') ||
+          errDetail.toLowerCase().includes('unauthorized');
 
         if (isTokenExpired) {
+          // Try auto refresh
+          const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_refresh_token') : null;
+          if (refreshToken) {
+            try {
+              const refreshRes = await fetch(`${API_BASE_URL}/vendor/auth/refresh-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken }),
+              });
+              if (refreshRes.ok) {
+                const refreshData = await refreshRes.json();
+                const newAccessToken =
+                  refreshData?.data?.accessToken ||
+                  refreshData?.accessToken ||
+                  refreshData?.data?.token ||
+                  refreshData?.token;
+                if (newAccessToken) {
+                  localStorage.setItem('zippy_vendor_token', newAccessToken);
+                  // Retry adding this product
+                  await onAddProduct(payload);
+                  successCount++;
+                  addedProductNames.push(p.name);
+                  setMessages((prev) =>
+                    prev.map((msg) => {
+                      if (msg.id !== msgId || !msg.products) return msg;
+                      const updatedProds = msg.products.map((prod) =>
+                        prod.name.trim().toLowerCase() === p.name.trim().toLowerCase()
+                          ? { ...prod, isAdded: true, selected: false }
+                          : prod
+                      );
+                      return { ...msg, products: updatedProds };
+                    })
+                  );
+                  continue;
+                }
+              }
+            } catch (rErr) {
+              console.warn('Auto refresh failed during batch:', rErr);
+            }
+          }
+
           setBatchAdding(false);
           if (typeof window !== 'undefined') {
             localStorage.removeItem('zippy_vendor_token');
@@ -1053,35 +1218,35 @@ export default function AiProductChatbot({
           return;
         }
 
-        if (String(errMsg).toLowerCase().includes('already exists') || String(errMsg).toLowerCase().includes('exist')) {
+        if (errDetail.toLowerCase().includes('already exists') || errDetail.toLowerCase().includes('exist')) {
+          toast(`Product "${p.name}" is already created in your catalog. Please edit it from the Product List.`, {
+            duration: 5000,
+            icon: 'ℹ️',
+          });
           successCount++;
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id !== msgId || !msg.products) return msg;
+              const updatedProds = msg.products.map((prod) =>
+                prod.name.trim().toLowerCase() === p.name.trim().toLowerCase()
+                  ? { ...prod, isAdded: true, selected: false }
+                  : prod
+              );
+              return { ...msg, products: updatedProds };
+            })
+          );
         } else {
-          failCount++;
+          // CLEARLY IDENTIFY THE EXACT FAILED PRODUCT AND REASON
+          toast.error(`Could not register "${p.name}": ${errDetail}`);
         }
       }
     }
 
     setBatchAdding(false);
 
-    if (successCount > 0) {
-      toast.success(`🎉 ${successCount} products added to catalog successfully!`);
-
-      // Update added flags in message
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.id !== msgId || !msg.products) return msg;
-          const updatedProds = msg.products.map((p) =>
-            p.selected ? { ...p, isAdded: true, selected: false } : p
-          );
-          return { ...msg, products: updatedProds };
-        })
-      );
-
+    if (addedProductNames.length > 0) {
+      toast.success(`🎉 ${addedProductNames.length} product${addedProductNames.length > 1 ? 's' : ''} added to catalog successfully!`);
       if (onCatalogRefresh) onCatalogRefresh();
-    }
-
-    if (failCount > 0) {
-      toast.error(`${failCount} products failed to add. Check categories and required fields.`);
     }
   };
 

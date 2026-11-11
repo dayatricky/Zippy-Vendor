@@ -2158,14 +2158,15 @@ export default function ProductsPage() {
             refetchProducts();
             return res;
           } catch (err: any) {
+            const rawMsg = err?.data?.message || err?.data?.msg || err?.message || 'Failed to add product';
+            const cleanMsg = Array.isArray(rawMsg) ? rawMsg.join('. ') : String(rawMsg);
             const status = err?.status || err?.originalStatus;
-            const errMsg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to add product';
 
             // If backend throws "already exists" (e.g. Catalog value already exists / 409 / 400)
             if (
-              String(errMsg).toLowerCase().includes('already exists') ||
+              cleanMsg.toLowerCase().includes('already exists') ||
               status === 409 ||
-              (status === 400 && String(errMsg).toLowerCase().includes('exist'))
+              (status === 400 && cleanMsg.toLowerCase().includes('exist'))
             ) {
               toast('This product is already created. You cannot edit it from here. Please go to the Product List to edit it.', {
                 duration: 5000,
@@ -2174,12 +2175,12 @@ export default function ProductsPage() {
               return { alreadyExists: true };
             }
 
-            if (status === 401 || String(errMsg).toLowerCase().includes('token') || String(errMsg).toLowerCase().includes('unauthorized')) {
+            if (status === 401 || cleanMsg.toLowerCase().includes('token') || cleanMsg.toLowerCase().includes('unauthorized')) {
               toast.error('Authentication token has expired. Please log in again.', { duration: 5000, icon: '🔒' });
               setTimeout(() => router.push('/login'), 1200);
-              throw err;
+              throw new Error('Session expired');
             }
-            throw err;
+            throw new Error(cleanMsg);
           }
         }}
         onOpenManualModal={(prod) => {
