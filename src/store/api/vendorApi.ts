@@ -717,7 +717,7 @@ export const vendorApi = createApi({
           remarks: remarks || `Status updated to ${status}`,
         },
       }),
-      invalidatesTags: ['Orders'],
+      invalidatesTags: (_result, _error, { orderId }) => ['Orders', { type: 'Orders', id: orderId }],
     }),
 
     // ==========================================

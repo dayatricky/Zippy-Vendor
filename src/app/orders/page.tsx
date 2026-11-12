@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   ShoppingBag,
@@ -27,11 +27,41 @@ import {
 } from '@/store/api/vendorApi';
 import { resolveImageUrl } from '@/utils/imageUrl';
 
+const ALLOWED_ORDER_TRANSITIONS: Record<string, Array<{ value: string; label: string }>> = {
+  PENDING: [
+    { value: 'CONFIRMED', label: 'CONFIRMED (Accept Order)' },
+    { value: 'REJECTED', label: 'REJECTED (Decline Order)' },
+    { value: 'CANCELLED', label: 'CANCELLED' },
+  ],
+  NEW: [
+    { value: 'CONFIRMED', label: 'CONFIRMED (Accept Order)' },
+    { value: 'REJECTED', label: 'REJECTED (Decline Order)' },
+    { value: 'CANCELLED', label: 'CANCELLED' },
+  ],
+  CONFIRMED: [
+    { value: 'PREPARING', label: 'PREPARING (Start Preparing)' },
+    { value: 'CANCELLED', label: 'CANCELLED' },
+  ],
+  PREPARING: [
+    { value: 'READY_FOR_PICKUP', label: 'READY_FOR_PICKUP (Mark Ready for Pickup)' },
+  ],
+  PACKING: [
+    { value: 'READY_FOR_PICKUP', label: 'READY_FOR_PICKUP (Mark Ready for Pickup)' },
+  ],
+  READY_FOR_PICKUP: [
+    { value: 'OUT_FOR_DELIVERY', label: 'OUT_FOR_DELIVERY (Handover to Rider)' },
+  ],
+  OUT_FOR_DELIVERY: [
+    { value: 'DELIVERED', label: 'DELIVERED (Mark Delivered)' },
+  ],
+};
+
 export default function OrdersPage() {
   const { orders: localOrders, updateOrderStatus: localUpdateOrderStatus } = useVendorStore();
   const [activeTab, setActiveTab] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [modalNextStatus, setModalNextStatus] = useState<string>('');
   const [statusRemarks, setStatusRemarks] = useState<string>('');
   const [actionError, setActionError] = useState<string>('');
 
@@ -170,8 +200,55 @@ export default function OrdersPage() {
     return matchesSearch && (o.status === activeTab || (activeTab === 'PENDING' && o.status === 'NEW'));
   });
 
-  const handleStatusChange = async (orderId: string, nextStatus: string, remarks?: string) => {
+  // Helper to extract full details from single order API call
+  const singleOrderObj = (singleOrderApiData as any)?.data || singleOrderApiData;
+  const modalOrderSummary = displayOrders.find((o) => o.id === selectedOrderId);
+  const currentModalStatus = String(
+    singleOrderObj?.status || modalOrderSummary?.status || 'PENDING'
+  ).toUpperCase();
+  const allowedModalTransitions = ALLOWED_ORDER_TRANSITIONS[currentModalStatus] || [];
+  const modalTotalAmount = Number(
+    singleOrderObj?.billing_details?.total_amount ??
+      singleOrderObj?.total_amount ??
+      singleOrderObj?.totalAmount ??
+      singleOrderObj?.grand_total ??
+      modalOrderSummary?.totalAmount ??
+      0
+  );
+
+  useEffect(() => {
+    if (!selectedOrderId) {
+      setModalNextStatus('');
+      return;
+    }
+    const nextOptions = ALLOWED_ORDER_TRANSITIONS[currentModalStatus] || [];
+    setModalNextStatus(nextOptions[0]?.value || '');
+  }, [selectedOrderId, currentModalStatus]);
+
+  const handleStatusChange = async (orderId: string, nextStatus: string, remarks?: string): Promise<boolean> => {
     setActionError('');
+    if (!nextStatus) {
+      toast.error('No valid next order status available.');
+      return false;
+    }
+
+    const orderInStream = displayOrders.find((o) => o.id === orderId);
+    const currentStatus = String(
+      (selectedOrderId === orderId ? singleOrderObj?.status : null) ||
+        orderInStream?.status ||
+        ''
+    ).toUpperCase();
+
+    if (currentStatus) {
+      const allowedValues = (ALLOWED_ORDER_TRANSITIONS[currentStatus] || []).map((t) => t.value);
+      if (!allowedValues.includes(nextStatus.toUpperCase())) {
+        const errMsg = `Invalid order status transition from ${currentStatus} to ${nextStatus}.`;
+        setActionError(errMsg);
+        toast.error(errMsg);
+        return false;
+      }
+    }
+
     try {
       await updateOrderStatusApi({
         orderId,
@@ -179,16 +256,24 @@ export default function OrdersPage() {
         remarks: remarks || `Order status updated to ${nextStatus}`,
       }).unwrap();
       toast.success(`Order status updated to ${nextStatus}! 🚀`);
+      // Only update local Zustand store after backend API succeeds
+      const mappedLocalStatus =
+        nextStatus === 'PENDING'
+          ? 'NEW'
+          : nextStatus === 'PREPARING'
+          ? 'PACKING'
+          : nextStatus === 'DELIVERED'
+          ? 'COMPLETED'
+          : nextStatus;
+      localUpdateOrderStatus(orderId, mappedLocalStatus as any);
+      return true;
     } catch (err: any) {
       console.error('Order Status Update Failed:', err);
       const msg = err?.data?.msg || err?.data?.message || err?.message || 'Failed to update order status';
       setActionError(msg);
       toast.error(msg);
+      return false;
     }
-
-    // Also update local Zustand store for instant optimistic feedback
-    const mappedLocalStatus = nextStatus === 'PENDING' ? 'NEW' : nextStatus === 'PREPARING' ? 'PACKING' : nextStatus === 'DELIVERED' ? 'COMPLETED' : nextStatus;
-    localUpdateOrderStatus(orderId, mappedLocalStatus as any);
   };
 
   const getStatusBadge = (status: string) => {
@@ -215,9 +300,6 @@ export default function OrdersPage() {
         return <span className="px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-black">{status}</span>;
     }
   };
-
-  // Helper to extract full details from single order API call
-  const singleOrderObj = (singleOrderApiData as any)?.data || singleOrderApiData;
 
   return (
     <div className="space-y-6 animate-in fade-in-50 duration-300">
@@ -293,6 +375,8 @@ export default function OrdersPage() {
             { id: 'READY_FOR_PICKUP', label: 'Ready for Pickup', count: displayOrders.filter((o) => o.status === 'READY_FOR_PICKUP').length },
             { id: 'OUT_FOR_DELIVERY', label: 'Out for Delivery', count: displayOrders.filter((o) => o.status === 'OUT_FOR_DELIVERY').length },
             { id: 'DELIVERED', label: 'Delivered', count: displayOrders.filter((o) => o.status === 'DELIVERED' || o.status === 'COMPLETED').length },
+            { id: 'CANCELLED', label: 'Cancelled', count: displayOrders.filter((o) => o.status === 'CANCELLED').length },
+            { id: 'REJECTED', label: 'Rejected', count: displayOrders.filter((o) => o.status === 'REJECTED').length },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -534,64 +618,87 @@ export default function OrdersPage() {
                   </div>
                   <div>
                     <span className="text-slate-500 font-semibold block">Order Number</span>
-                    <span className="font-mono font-bold text-slate-900">{singleOrderObj?.order_number || singleOrderObj?.orderNumber || 'N/A'}</span>
+                    <span className="font-mono font-bold text-slate-900">{singleOrderObj?.order_number || singleOrderObj?.orderNumber || modalOrderSummary?.orderNumber || 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 font-semibold block">Status</span>
-                    <span className="font-bold text-[#167a46]">{singleOrderObj?.status || 'PENDING'}</span>
+                    <span className="font-bold text-[#167a46]">{currentModalStatus}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 font-semibold block">Total Amount</span>
-                    <span className="font-bold text-slate-900">₹{singleOrderObj?.total_amount || singleOrderObj?.grand_total || 0}</span>
+                    <span className="font-bold text-slate-900">₹{modalTotalAmount}</span>
                   </div>
                 </div>
 
                 {/* Status Update Form inside Modal */}
                 <div className="p-4 rounded-xl border border-slate-200 space-y-3 bg-white">
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Update Order Status</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">New Status</label>
-                      <select
-                        id="modal-status-select"
-                        className="custom-input w-full px-3 py-2 text-xs bg-white cursor-pointer"
-                        defaultValue={singleOrderObj?.status || 'CONFIRMED'}
-                      >
-                        <option value="PENDING">PENDING</option>
-                        <option value="CONFIRMED">CONFIRMED</option>
-                        <option value="PREPARING">PREPARING</option>
-                        <option value="READY_FOR_PICKUP">READY_FOR_PICKUP</option>
-                        <option value="OUT_FOR_DELIVERY">OUT_FOR_DELIVERY</option>
-                        <option value="DELIVERED">DELIVERED</option>
-                        <option value="REJECTED">REJECTED</option>
-                        <option value="CANCELLED">CANCELLED</option>
-                      </select>
+
+                  {allowedModalTransitions.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 flex items-center space-x-2">
+                      <CheckCircle2 className="w-4 h-4 text-[#167a46] shrink-0" />
+                      <span>
+                        Order is in terminal status (<span className="font-bold text-slate-900">{currentModalStatus}</span>). No further status updates are allowed.
+                      </span>
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Status Remarks</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Accepted by store team"
-                        value={statusRemarks}
-                        onChange={(e) => setStatusRemarks(e.target.value)}
-                        className="custom-input w-full px-3 py-2 text-xs"
-                      />
-                    </div>
-                  </div>
-                  <div className="pt-2 flex justify-end">
-                    <button
-                      disabled={isUpdatingStatus}
-                      onClick={() => {
-                        const selectEl = document.getElementById('modal-status-select') as HTMLSelectElement;
-                        if (selectEl) {
-                          handleStatusChange(selectedOrderId, selectEl.value, statusRemarks || 'Updated via Order Details modal');
-                        }
-                      }}
-                      className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white font-bold text-xs shadow-xs cursor-pointer"
-                    >
-                      {isUpdatingStatus ? 'Updating...' : 'Update Status'}
-                    </button>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">New Status</label>
+                          <select
+                            id="modal-status-select"
+                            className="custom-input w-full px-3 py-2 text-xs bg-white cursor-pointer"
+                            value={modalNextStatus}
+                            onChange={(e) => setModalNextStatus(e.target.value)}
+                          >
+                            {allowedModalTransitions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-600 mb-1">Status Remarks</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Accepted by store team"
+                            value={statusRemarks}
+                            onChange={(e) => setStatusRemarks(e.target.value)}
+                            className="custom-input w-full px-3 py-2 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {(currentModalStatus === 'PREPARING' || currentModalStatus === 'PACKING') && (
+                        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 font-medium">
+                          Order preparation has started — cancellation is disabled at this stage. Mark the order as <strong>READY_FOR_PICKUP</strong> once packed.
+                        </p>
+                      )}
+
+                      <div className="pt-2 flex justify-end">
+                        <button
+                          disabled={isUpdatingStatus || !modalNextStatus}
+                          onClick={async () => {
+                            if (!modalNextStatus) return;
+                            const ok = await handleStatusChange(
+                              selectedOrderId,
+                              modalNextStatus,
+                              statusRemarks || 'Updated via Order Details modal'
+                            );
+                            if (ok) {
+                              setStatusRemarks('');
+                              setSelectedOrderId(null);
+                            }
+                          }}
+                          className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] disabled:opacity-60 text-white font-bold text-xs shadow-xs cursor-pointer"
+                        >
+                          {isUpdatingStatus ? 'Updating...' : 'Update Status'}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
