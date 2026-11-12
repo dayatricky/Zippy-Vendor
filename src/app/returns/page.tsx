@@ -443,6 +443,160 @@ export const extractEvidenceList = (firstItem: any, r: any, rawReason: any, item
   return uniqueUrls;
 };
 
+const REASON_CATEGORY_RULES: Array<{ category: string; keywords: string[]; exactOnly?: string[] }> = [
+  {
+    // Checked first so phrases like "ordered wrong" or "didn't like sour taste" map to Customer Preference
+    category: 'Customer Preference',
+    keywords: [
+      'prefer',
+      'mind',
+      'no longer need',
+      'not need',
+      'no need',
+      "don't need",
+      'dont need',
+      "don't want",
+      'dont want',
+      'no longer want',
+      "didn't like",
+      'did not like',
+      'dislike',
+      'taste',
+      'not satisfied',
+      'unsatisfied',
+      'mistake',
+      'accidental',
+      'ordered wrong',
+      'bought elsewhere',
+      'cheaper',
+      'personal',
+      'size issue',
+      'fit issue',
+      'too small',
+      'too large',
+      'other reason',
+    ],
+    exactOnly: ['other', 'others'],
+  },
+  {
+    category: 'Wrong Item / Variant',
+    keywords: ['wrong', 'incorrect', 'different', 'variant', 'flavor', 'flavour', 'missing', 'mismatch', 'not what'],
+  },
+  {
+    category: 'Damaged / Leaking',
+    keywords: ['damag', 'leak', 'broken', 'crush', 'dent', 'torn', 'punctur', 'spill', 'defect', 'crack'],
+  },
+  {
+    category: 'Expired / Quality Issue',
+    keywords: ['rotten', 'expired', 'expiry', 'quality', 'spoil', 'stale', 'mold', 'fungus', 'smell', 'sour', 'bad'],
+  },
+];
+
+export const matchReturnReasonCategory = (text: string): string | null => {
+  const lower = String(text || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  if (!lower) return null;
+
+  for (const rule of REASON_CATEGORY_RULES) {
+    if (rule.exactOnly?.includes(lower)) return rule.category;
+    if (rule.keywords.some((kw) => lower.includes(kw))) return rule.category;
+  }
+
+  return null;
+};
+
+export const categorizeReturnReasonText = (text: string): string => {
+  return matchReturnReasonCategory(text) || 'Expired / Quality Issue';
+};
+
+export const extractReturnReasonInfo = (
+  firstItem: any,
+  r: any
+): { title: string; category: string; customerNotes: string } => {
+  const rawReason = firstItem?.reason ?? r?.reason ?? null;
+  const reasonObj = typeof rawReason === 'object' && rawReason !== null ? rawReason : {};
+
+  const explicitCategory = String(
+    reasonObj.category ||
+      firstItem?.reason_category ||
+      firstItem?.reasonCategory ||
+      firstItem?.return_reason_category ||
+      firstItem?.returnReasonCategory ||
+      r?.reason_category ||
+      r?.reasonCategory ||
+      r?.return_reason_category ||
+      r?.returnReasonCategory ||
+      ''
+  ).trim();
+
+  const rawTitle = String(
+    (typeof rawReason === 'string' ? rawReason : '') ||
+      reasonObj.title ||
+      reasonObj.name ||
+      reasonObj.label ||
+      reasonObj.reason ||
+      reasonObj.code ||
+      reasonObj.type ||
+      firstItem?.return_reason ||
+      firstItem?.returnReason ||
+      firstItem?.customer_reason ||
+      firstItem?.customerReason ||
+      firstItem?.reason_text ||
+      firstItem?.reasonText ||
+      r?.return_reason ||
+      r?.returnReason ||
+      r?.customer_reason ||
+      r?.customerReason ||
+      r?.reason_text ||
+      r?.reasonText ||
+      explicitCategory ||
+      'Return Request'
+  ).trim();
+
+  const rawNotes = String(
+    firstItem?.customer_notes ||
+      firstItem?.customerNotes ||
+      firstItem?.notes ||
+      reasonObj.customerNotes ||
+      reasonObj.customer_notes ||
+      reasonObj.notes ||
+      reasonObj.description ||
+      r?.customer_notes ||
+      r?.customerNotes ||
+      r?.notes ||
+      ''
+  ).trim();
+
+  const customerNotes =
+    rawNotes ||
+    (rawTitle && rawTitle !== 'Return Request'
+      ? `Customer stated: ${rawTitle}`
+      : 'Customer requested return for this item.');
+
+  const category =
+    matchReturnReasonCategory(explicitCategory) ||
+    matchReturnReasonCategory(rawTitle) ||
+    matchReturnReasonCategory(rawNotes) ||
+    'Expired / Quality Issue';
+
+  const displayTitle = /^[A-Z0-9_]+$/.test(rawTitle)
+    ? rawTitle
+        .toLowerCase()
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+    : rawTitle;
+
+  return {
+    title: displayTitle,
+    category,
+    customerNotes,
+  };
+};
+
 const INITIAL_RETURNS: ReturnRequest[] = [
   {
     id: 'ret-1',
@@ -1277,12 +1431,16 @@ export default function ReturnsPage() {
         0
       );
 
+      const deepReasonInfo = extractReturnReasonInfo(targetItem, detail);
+
       setSelectedReturn((prev) => {
         if (!prev) return prev;
         const allEv = [...(prev.reason.images || []), ...additionalImages].filter(
           (img) => Boolean(img) && !isGenericPlaceholder(img)
         );
         const mergedImages = Array.from(new Set(allEv));
+        const hasSpecificDeepReason =
+          deepReasonInfo.title && deepReasonInfo.title !== 'Return Request';
         return {
           ...prev,
           product: {
@@ -1294,6 +1452,13 @@ export default function ReturnsPage() {
           },
           reason: {
             ...prev.reason,
+            title: hasSpecificDeepReason ? deepReasonInfo.title : prev.reason.title,
+            category: hasSpecificDeepReason ? deepReasonInfo.category : prev.reason.category,
+            customerNotes:
+              deepReasonInfo.customerNotes &&
+              deepReasonInfo.customerNotes !== 'Customer requested return for this item.'
+                ? deepReasonInfo.customerNotes
+                : prev.reason.customerNotes,
             images: mergedImages,
           },
           review: {
@@ -1552,27 +1717,11 @@ export default function ReturnsPage() {
 
           // Reason
           const rawReason = firstItem?.reason || r.reason || {};
-          const reasonStr = typeof rawReason === 'string'
-            ? rawReason
-            : rawReason.title || rawReason.category || r.return_reason || 'Return Request';
-
-          let reasonCat = 'Expired / Quality Issue';
-          const lowerR = reasonStr.toLowerCase();
-          if (lowerR.includes('rotten') || lowerR.includes('expired') || lowerR.includes('quality') || lowerR.includes('sour')) {
-            reasonCat = 'Expired / Quality Issue';
-          } else if (lowerR.includes('damag') || lowerR.includes('leak') || lowerR.includes('broken')) {
-            reasonCat = 'Damaged / Leaking';
-          } else if (lowerR.includes('wrong') || lowerR.includes('incorrect') || lowerR.includes('different')) {
-            reasonCat = 'Wrong Item / Variant';
-          } else if (lowerR.includes('prefer') || lowerR.includes('mind') || lowerR.includes('not need')) {
-            reasonCat = 'Customer Preference';
-          }
-
-          const customerNotes = firstItem?.customer_notes ||
-            firstItem?.notes ||
-            (typeof rawReason === 'object' ? rawReason.customerNotes || rawReason.notes : null) ||
-            r.customer_notes ||
-            (typeof rawReason === 'string' ? `Customer stated: ${rawReason}` : 'Customer requested return for this item.');
+          const {
+            title: reasonStr,
+            category: reasonCat,
+            customerNotes,
+          } = extractReturnReasonInfo(firstItem, r);
 
           const reasonImages: string[] = extractEvidenceList(firstItem, r, rawReason, itemId);
 
@@ -1774,7 +1923,14 @@ export default function ReturnsPage() {
       if (typeFilter !== 'ALL' && item.type !== typeFilter) return false;
 
       // Reason Filter
-      if (reasonFilter !== 'ALL' && item.reason.category !== reasonFilter) return false;
+      if (reasonFilter !== 'ALL') {
+        const filterLower = reasonFilter.toLowerCase();
+        const matchesCategory = item.reason.category.toLowerCase() === filterLower;
+        const matchesTitle = item.reason.title.toLowerCase().includes(filterLower);
+        const matchesNotes = (item.reason.customerNotes || '').toLowerCase().includes(filterLower);
+        const inferredFromTitle = categorizeReturnReasonText(item.reason.title).toLowerCase() === filterLower;
+        if (!matchesCategory && !matchesTitle && !matchesNotes && !inferredFromTitle) return false;
+      }
 
       // Search Filter
       if (searchTerm.trim()) {
