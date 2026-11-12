@@ -43,6 +43,97 @@ import { startVoiceRecording, VoiceRecordingSession } from '@/utils/audioRecorde
 import ImageUploadField from '@/components/ImageUploadField';
 import { resolveImageUrl } from '@/utils/imageUrl';
 
+const VOICE_FILLER_WORDS = new Set([
+  'search', 'find', 'show', 'me', 'get', 'for', 'product', 'products', 'item', 'items',
+  'please', 'i', 'want', 'to', 'buy', 'add', 'looking', 'the', 'a', 'an', 'some', 'give',
+]);
+
+function normalizeSearchToken(token: string): string {
+  const clean = token.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (clean.length > 4 && clean.endsWith('ies')) return `${clean.slice(0, -3)}y`;
+  if (clean.length > 3 && clean.endsWith('es')) return clean.slice(0, -2);
+  if (clean.length > 3 && clean.endsWith('s')) return clean.slice(0, -1);
+  return clean;
+}
+
+export function findMatchingCatalogProducts(queryText: string, catalog: any[]): any[] {
+  const raw = String(queryText || '').trim().toLowerCase();
+  if (!raw || !Array.isArray(catalog) || catalog.length === 0) return [];
+
+  const words = raw
+    .split(/[\s,]+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length > 0 && !VOICE_FILLER_WORDS.has(w));
+
+  const tokens = (words.length > 0 ? words : raw.split(/[\s,]+/).filter(Boolean))
+    .map(normalizeSearchToken)
+    .filter((t) => t.length >= 2);
+
+  if (tokens.length === 0) return [];
+
+  const cleanPhrase = words.join(' ').trim() || raw;
+
+  const scored = catalog
+    .map((p) => {
+      const name = String(p.name || '').toLowerCase();
+      const cat = String(p.category || '').toLowerCase();
+      const sku = String(p.sku || '').toLowerCase();
+      const unit = String(p.unit || '').toLowerCase();
+      const haystack = `${name} ${cat} ${sku} ${unit}`;
+      const haystackWords = haystack
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean)
+        .map(normalizeSearchToken);
+
+      let score = 0;
+      if (name === cleanPhrase) score += 100;
+      else if (name.includes(cleanPhrase)) score += 60;
+      else if (haystack.includes(cleanPhrase)) score += 30;
+
+      let matchedTokenCount = 0;
+      for (const tok of tokens) {
+        const directMatch =
+          haystack.includes(tok) ||
+          haystackWords.some((hw) => hw.includes(tok) || (hw.length >= 4 && tok.includes(hw)));
+
+        // Handle minor spelling/transliteration variants like "chocolate" vs "choclate"
+        const prefixMatch =
+          tok.length >= 4 &&
+          haystackWords.some((hw) => hw.length >= 4 && hw.slice(0, 4) === tok.slice(0, 4));
+
+        if (directMatch) {
+          matchedTokenCount++;
+          score += name.includes(tok) ? 25 : 12;
+        } else if (prefixMatch) {
+          matchedTokenCount++;
+          score += 10;
+        }
+      }
+
+      if (matchedTokenCount === tokens.length && tokens.length > 0) {
+        score += 20;
+      }
+
+      return { product: p, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored.map(({ product }) => ({
+    id: product.id,
+    name: product.name,
+    category: product.category || 'General',
+    category_name: product.category || 'General',
+    description: product.description || product.name,
+    mrp: product.mrp || product.price || 40,
+    price: product.price || product.mrp || 40,
+    sku: product.sku || '',
+    unit: product.unit || '1 kg',
+    stock_quantity: product.stock ?? 10,
+    image_url: product.image || product.rawImageUrl || '',
+  }));
+}
+
 export default function ProductsPage() {
   const { products: localProducts, categories: localCategories, addProduct, updateProduct, deleteProduct, toggleProductAvailability, vendor, setStoreModalOpen } = useVendorStore();
   
@@ -88,6 +179,7 @@ export default function ProductsPage() {
   const [isTextSearching, setIsTextSearching] = useState(false);
   const [voiceRecordingSession, setVoiceRecordingSession] = useState<VoiceRecordingSession | null>(null);
   const sessionRef = useRef<VoiceRecordingSession | null>(null);
+  const allCatalogSnapshotRef = useRef<any[]>([]);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   useEffect(() => {
@@ -110,10 +202,12 @@ export default function ProductsPage() {
     setIsRecordingVoice(false);
     setIsVoiceSearching(true);
 
+    let capturedTranscript = '';
     try {
-      const { base64 } = await session.stop();
+      const { base64, transcript } = await session.stop();
+      capturedTranscript = (transcript || '').trim();
 
-      const toastId = toast.loading('Searching products from voice (search_products_from_voice_tool)...');
+      const toastId = toast.loading('Searching products from voice...');
 
       const userToken = token || (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null);
       const res = await fetch('/api/ai/products/voice-search', {
@@ -122,23 +216,56 @@ export default function ProductsPage() {
           'Content-Type': 'application/json',
           ...(userToken ? { 'Authorization': `Bearer ${userToken}` } : {}),
         },
-        body: JSON.stringify({ audio_base64: base64 }),
+        body: JSON.stringify({
+          audio_base64: base64,
+          transcript: capturedTranscript,
+        }),
       });
 
       const data = await res.json();
       toast.dismiss(toastId);
 
+      const effectiveTranscript = String(data.transcript || capturedTranscript || '').trim();
+      const catalogPool = allCatalogSnapshotRef.current.length > 0 ? allCatalogSnapshotRef.current : displayProducts;
+
       if (!data.success) {
-        toast.error(data.message || 'Voice search could not recognize audio. Please try again.');
+        if (effectiveTranscript) {
+          const localMatches = findMatchingCatalogProducts(effectiveTranscript, catalogPool);
+          setSearchTerm(effectiveTranscript);
+          setMcpSearchResults({
+            source: 'voice',
+            query: effectiveTranscript,
+            results: localMatches,
+          });
+          if (localMatches.length > 0) {
+            toast.success(`Found ${localMatches.length} matching product(s) for "${effectiveTranscript}"!`, { icon: '🎙️' });
+          } else {
+            toast(`No catalog products matched "${effectiveTranscript}".`, { icon: '🔍' });
+          }
+          return;
+        }
+
+        const friendlyError =
+          data.code === 'AI_CREDITS_EXHAUSTED'
+            ? 'Voice AI server quota reached. Please speak clearly in Chrome/Edge or type the product name in the search bar.'
+            : data.message || 'Voice search could not recognize audio. Please try again.';
+        toast.error(friendlyError);
         return;
       }
 
-      const results = data.results || [];
-      const topTerm = results.length > 0 ? results[0].name : 'Voice Search';
+      let results = Array.isArray(data.results) ? data.results : [];
+      if (results.length === 0 && effectiveTranscript) {
+        results = findMatchingCatalogProducts(effectiveTranscript, catalogPool);
+      }
+
+      const topTerm = effectiveTranscript || (results.length > 0 ? results[0].name : 'Voice Search');
+      if (effectiveTranscript) {
+        setSearchTerm(effectiveTranscript);
+      }
       setMcpSearchResults({
         source: 'voice',
         query: topTerm,
-        results: results,
+        results,
       });
 
       if (results.length > 0) {
@@ -148,7 +275,19 @@ export default function ProductsPage() {
       }
     } catch (err: any) {
       console.error('Voice search failed:', err);
-      toast.error(err.message || 'Voice search request failed.');
+      const catalogPool = allCatalogSnapshotRef.current.length > 0 ? allCatalogSnapshotRef.current : displayProducts;
+      if (capturedTranscript) {
+        const localMatches = findMatchingCatalogProducts(capturedTranscript, catalogPool);
+        setSearchTerm(capturedTranscript);
+        setMcpSearchResults({
+          source: 'voice',
+          query: capturedTranscript,
+          results: localMatches,
+        });
+        toast.success(`Matched ${localMatches.length} product(s) for "${capturedTranscript}"!`, { icon: '🎙️' });
+      } else {
+        toast.error(err.message || 'Voice search request failed.');
+      }
     } finally {
       setIsVoiceSearching(false);
     }
@@ -175,7 +314,7 @@ export default function ProductsPage() {
     }
   };
 
-  // MCP Text Search using search_products_tool
+  // MCP Text Search using search_products_tool (with seamless local catalog fallback)
   const handleTextSearchSubmit = async (queryText?: string) => {
     const q = (queryText !== undefined ? queryText : searchTerm).trim();
     if (!q) {
@@ -184,7 +323,9 @@ export default function ProductsPage() {
     }
 
     setIsTextSearching(true);
-    const toastId = toast.loading(`Searching MCP catalog for "${q}"...`);
+    const toastId = toast.loading(`Searching catalog for "${q}"...`);
+    const catalogPool = allCatalogSnapshotRef.current.length > 0 ? allCatalogSnapshotRef.current : displayProducts;
+
     try {
       const userToken = token || (typeof window !== 'undefined' ? localStorage.getItem('zippy_vendor_token') : null);
       const res = await fetch('/api/ai/products/search', {
@@ -199,15 +340,29 @@ export default function ProductsPage() {
       toast.dismiss(toastId);
 
       if (!data.success) {
-        toast.error(data.message || 'Search failed.');
+        const localMatches = findMatchingCatalogProducts(q, catalogPool);
+        setMcpSearchResults({
+          source: 'text',
+          query: q,
+          results: localMatches,
+        });
+        if (localMatches.length > 0) {
+          toast.success(`Found ${localMatches.length} matching product(s) for "${q}"!`, { icon: '🔍' });
+        } else {
+          toast(`No products found for "${q}".`, { icon: '🔍' });
+        }
         return;
       }
 
-      const results = data.results || [];
+      let results = Array.isArray(data.results) ? data.results : [];
+      if (results.length === 0) {
+        results = findMatchingCatalogProducts(q, catalogPool);
+      }
+
       setMcpSearchResults({
         source: 'text',
         query: q,
-        results: results,
+        results,
       });
 
       if (results.length > 0) {
@@ -218,7 +373,17 @@ export default function ProductsPage() {
     } catch (err: any) {
       toast.dismiss(toastId);
       console.error('MCP text search failed:', err);
-      toast.error(err.message || 'Search request failed.');
+      const localMatches = findMatchingCatalogProducts(q, catalogPool);
+      setMcpSearchResults({
+        source: 'text',
+        query: q,
+        results: localMatches,
+      });
+      if (localMatches.length > 0) {
+        toast.success(`Found ${localMatches.length} matching product(s) for "${q}"!`, { icon: '🔍' });
+      } else {
+        toast.error(err.message || 'Search request failed.');
+      }
     } finally {
       setIsTextSearching(false);
     }
@@ -394,6 +559,12 @@ export default function ProductsPage() {
     }
     return combined;
   }, [rawApiProducts, localProducts]);
+
+  useEffect(() => {
+    if (!searchTerm.trim() && displayProducts.length > 0) {
+      allCatalogSnapshotRef.current = displayProducts;
+    }
+  }, [displayProducts, searchTerm]);
 
   const pendingCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'PENDING').length, [displayProducts]);
   const activeCount = useMemo(() => displayProducts.filter((p: any) => p.status === 'ACTIVE').length, [displayProducts]);

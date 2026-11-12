@@ -4,7 +4,7 @@
  */
 
 export interface VoiceRecordingSession {
-  stop: () => Promise<{ base64: string; durationMs: number }>;
+  stop: () => Promise<{ base64: string; durationMs: number; transcript: string }>;
   cancel: () => void;
 }
 
@@ -180,8 +180,48 @@ export async function startVoiceRecording(options?: StartRecordingOptions): Prom
 
   let isStopped = false;
 
+  // Run browser Web Speech API in parallel as a free real-time transcription fallback
+  let finalTranscript = '';
+  let interimTranscript = '';
+  let recognition: any = null;
+  try {
+    const SpeechRecClass =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecClass) {
+      recognition = new SpeechRecClass();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-IN';
+      recognition.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const piece = String(event.results[i]?.[0]?.transcript || '');
+          if (event.results[i].isFinal) {
+            finalTranscript += ` ${piece}`;
+          } else {
+            interim += ` ${piece}`;
+          }
+        }
+        interimTranscript = interim;
+      };
+      recognition.onerror = () => {
+        // Ignore speech recognition errors so WAV recording continues cleanly
+      };
+      recognition.start();
+    }
+  } catch {
+    recognition = null;
+  }
+
   const cleanup = () => {
     isStopped = true;
+    try {
+      if (recognition) {
+        recognition.onresult = null;
+        recognition.onerror = null;
+        recognition.stop();
+      }
+    } catch {}
     try {
       scriptProcessor.disconnect();
       source.disconnect();
@@ -201,6 +241,7 @@ export async function startVoiceRecording(options?: StartRecordingOptions): Prom
         throw new Error('Recording has already stopped.');
       }
       const durationMs = Date.now() - startTime;
+      const transcript = `${finalTranscript} ${interimTranscript}`.replace(/\s+/g, ' ').trim();
       cleanup();
 
       // Merge collected Float32 chunks
@@ -231,6 +272,7 @@ export async function startVoiceRecording(options?: StartRecordingOptions): Prom
       return {
         base64,
         durationMs,
+        transcript,
       };
     },
     cancel: () => {

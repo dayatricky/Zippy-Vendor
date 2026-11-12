@@ -522,8 +522,10 @@ export default function AiProductChatbot({
       },
     ]);
 
+    let capturedTranscript = '';
     try {
-      const { base64 } = await session.stop();
+      const { base64, transcript } = await session.stop();
+      capturedTranscript = (transcript || '').trim();
 
       const toastId = toast.loading('Searching products with MCP AI (search_products_from_voice_tool)...');
 
@@ -531,7 +533,10 @@ export default function AiProductChatbot({
       let response = await fetch('/api/ai/products/voice-search', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ audio_base64: base64 }),
+        body: JSON.stringify({
+          audio_base64: base64,
+          transcript: capturedTranscript,
+        }),
       });
 
       let data = await response.json();
@@ -554,13 +559,18 @@ export default function AiProductChatbot({
           response = await fetch('/api/ai/products/voice-search', {
             method: 'POST',
             headers,
-            body: JSON.stringify({ audio_base64: base64 }),
+            body: JSON.stringify({
+              audio_base64: base64,
+              transcript: capturedTranscript,
+            }),
           });
           data = await response.json();
         }
       }
 
       toast.dismiss(toastId);
+
+      const effectiveTranscript = String(data.transcript || capturedTranscript || '').trim();
 
       if (!data.success) {
         const isStillAuthErr =
@@ -569,8 +579,25 @@ export default function AiProductChatbot({
             data.message.toLowerCase().includes('authorization') ||
             data.message.toLowerCase().includes('token'));
 
+        // If MCP voice AI hit 402 credits limit or failed, but browser SpeechRecognition captured the query,
+        // automatically process the spoken transcript with AI Copilot text prompt!
+        if (!isStillAuthErr && effectiveTranscript) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === userMsgId
+                ? { ...m, text: `🎙️ "${effectiveTranscript}"` }
+                : m
+            )
+          );
+          setIsVoiceProcessing(false);
+          await handleSendMessage(effectiveTranscript);
+          return;
+        }
+
         const friendlyMsg = isStillAuthErr
           ? 'Your vendor session has expired or is unauthorized. Please log in again to use Voice Search.'
+          : data.code === 'AI_CREDITS_EXHAUSTED'
+          ? 'Voice AI server credits limit reached. Please speak clearly in Chrome/Edge or type your product request below.'
           : data.message || 'Could not understand audio. Please speak clearly and try again.';
 
         setMessages((prev) => [
@@ -1396,8 +1423,8 @@ export default function AiProductChatbot({
         </div>
 
         {/* Quick Suggestion Chips */}
-        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 overflow-x-auto shrink-0 flex items-center space-x-2 scrollbar-none">
-          <span className="text-xs font-semibold text-slate-500 flex items-center gap-1 shrink-0">
+        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 shrink-0 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-semibold text-slate-500 flex items-center gap-1 shrink-0 mr-1">
             <Bot className="w-3.5 h-3.5 text-emerald-600" /> Prompts:
           </span>
           {QUICK_PROMPTS.map((qp, idx) => (
@@ -1405,7 +1432,7 @@ export default function AiProductChatbot({
               key={idx}
               onClick={() => handleSendMessage(qp.prompt)}
               disabled={isLoading}
-              className="text-xs px-3 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 rounded-full transition-all shrink-0 font-medium shadow-2xs hover:shadow-xs active:scale-95 disabled:opacity-50"
+              className="text-xs px-2.5 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 rounded-full transition-all shrink-0 font-medium shadow-2xs hover:shadow-xs active:scale-95 disabled:opacity-50 cursor-pointer"
             >
               {qp.label}
             </button>
@@ -1927,14 +1954,14 @@ export default function AiProductChatbot({
             }}
             className="flex items-center space-x-2"
           >
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
               <input
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                placeholder="e.g. 'Generate dairy products like milk and yogurt' or 'Farm fresh fruits'..."
+                placeholder="e.g. 'Dairy like milk & yogurt' or 'Fresh fruits'"
                 disabled={isLoading}
-                className="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 transition-all shadow-inner"
+                className="w-full pl-4 pr-10 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 text-ellipsis focus:outline-hidden focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 transition-all shadow-inner"
               />
               <Sparkles className="w-4 h-4 text-emerald-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
