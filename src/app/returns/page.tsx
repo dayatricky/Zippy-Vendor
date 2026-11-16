@@ -74,6 +74,14 @@ export interface TimelineEvent {
   actor: 'CUSTOMER' | 'VENDOR' | 'LOGISTICS' | 'SYSTEM';
 }
 
+export interface RiderInspectionInfo {
+  riderName?: string;
+  riderPhone?: string;
+  riderRemarks?: string;
+  evidenceImages: string[];
+  inspectedAt?: string;
+}
+
 export interface ReturnRequest {
   id: string;
   returnId?: string;
@@ -129,6 +137,7 @@ export interface ReturnRequest {
     customerNotes: string;
     images: string[];
   };
+  riderInspection?: RiderInspectionInfo;
   refund: {
     amount: number;
     mode: 'ORIGINAL_PAYMENT' | 'STORE_WALLET' | 'UPI';
@@ -441,6 +450,161 @@ export const extractEvidenceList = (firstItem: any, r: any, rawReason: any, item
     .filter((url) => Boolean(url) && !isGenericPlaceholder(url));
 
   return uniqueUrls;
+};
+
+export const extractRiderEvidenceList = (firstItem: any, r: any, itemId: string): string[] => {
+  const candidates: any[] = [];
+
+  const addCandidate = (val: any) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach(addCandidate);
+    } else if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            parsed.forEach(addCandidate);
+            return;
+          }
+        } catch {}
+      }
+      if (trimmed.includes(',')) {
+        trimmed.split(',').forEach((sub) => addCandidate(sub.trim()));
+        return;
+      }
+      if (trimmed.length > 0 && !isGenericPlaceholder(trimmed)) {
+        candidates.push(trimmed);
+      }
+    } else if (typeof val === 'object' && val !== null) {
+      const fn = val.url || val.filename || val.path || val.file || val.image_url || val.image || val.name || '';
+      if (fn && !isGenericPlaceholder(fn)) {
+        candidates.push(fn);
+      }
+    }
+  };
+
+  // Inspect delivery partner / rider photos: rider_evidence_urls, rider_evidence, inspection_photos
+  addCandidate(firstItem?.rider_evidence_urls);
+  addCandidate(firstItem?.rider_evidence);
+  addCandidate(firstItem?.riderEvidenceUrls);
+  addCandidate(firstItem?.riderEvidence);
+  addCandidate(firstItem?.rider_evidence_files);
+  addCandidate(firstItem?.rider_photos);
+  addCandidate(firstItem?.rider_proof_photos);
+  addCandidate(firstItem?.inspection_evidence);
+  addCandidate(firstItem?.inspection_photos);
+  addCandidate(firstItem?.delivery_partner_evidence);
+  addCandidate(firstItem?.deliveryPartnerEvidence);
+
+  addCandidate(r?.rider_evidence_urls);
+  addCandidate(r?.rider_evidence);
+  addCandidate(r?.riderEvidenceUrls);
+  addCandidate(r?.riderEvidence);
+  addCandidate(r?.rider_evidence_files);
+  addCandidate(r?.rider_photos);
+  addCandidate(r?.rider_proof_photos);
+  addCandidate(r?.inspection_evidence);
+  addCandidate(r?.inspection_photos);
+  addCandidate(r?.delivery_partner_evidence);
+  addCandidate(r?.deliveryPartnerEvidence);
+
+  const uniqueUrls = Array.from(new Set(candidates))
+    .map((raw) => {
+      const str = typeof raw === 'string' ? raw : String(raw);
+      if (isGenericPlaceholder(str)) return '';
+      return getReturnEvidenceUrl(itemId, str);
+    })
+    .filter((url) => Boolean(url) && !isGenericPlaceholder(url));
+
+  return uniqueUrls;
+};
+
+export const extractRiderInfo = (firstItem: any, r: any, itemId: string): RiderInspectionInfo | undefined => {
+  const riderEvidence = extractRiderEvidenceList(firstItem, r, itemId);
+
+  const riderRemarks = String(
+    firstItem?.rider_remarks ||
+      firstItem?.riderRemarks ||
+      firstItem?.rider_notes ||
+      firstItem?.riderNotes ||
+      firstItem?.inspection_remarks ||
+      firstItem?.inspectionRemarks ||
+      firstItem?.inspection_notes ||
+      firstItem?.delivery_partner_remarks ||
+      r?.rider_remarks ||
+      r?.riderRemarks ||
+      r?.rider_notes ||
+      r?.riderNotes ||
+      r?.inspection_remarks ||
+      r?.inspectionRemarks ||
+      r?.delivery_partner_remarks ||
+      ''
+  ).trim();
+
+  const deliveryPartner =
+    firstItem?.delivery_partner ||
+    firstItem?.deliveryPartner ||
+    r?.delivery_partner ||
+    r?.deliveryPartner ||
+    firstItem?.rider ||
+    r?.rider ||
+    {};
+
+  const riderName = String(
+    firstItem?.rider_name ||
+      firstItem?.riderName ||
+      firstItem?.delivery_partner_name ||
+      deliveryPartner?.name ||
+      deliveryPartner?.full_name ||
+      r?.rider_name ||
+      r?.riderName ||
+      r?.delivery_partner_name ||
+      r?.deliveryPartnerName ||
+      r?.pickup?.partner ||
+      firstItem?.pickup?.partner ||
+      ''
+  ).trim();
+
+  const riderPhone = String(
+    firstItem?.rider_phone ||
+      firstItem?.riderPhone ||
+      firstItem?.delivery_partner_phone ||
+      deliveryPartner?.phone ||
+      deliveryPartner?.phone_number ||
+      deliveryPartner?.mobile ||
+      r?.rider_phone ||
+      r?.riderPhone ||
+      r?.delivery_partner_phone ||
+      r?.deliveryPartnerPhone ||
+      ''
+  ).trim();
+
+  const inspectedAtRaw =
+    firstItem?.inspected_at ||
+    firstItem?.inspectedAt ||
+    r?.inspected_at ||
+    r?.inspectedAt;
+
+  const inspectedAt = inspectedAtRaw ? formatReturnDate(inspectedAtRaw) : undefined;
+
+  if (
+    riderEvidence.length > 0 ||
+    riderRemarks ||
+    (riderName && riderName !== 'Zippy Express Logistics' && riderName !== 'Zippy Express Rider') ||
+    riderPhone
+  ) {
+    return {
+      riderName: riderName || 'Assigned Delivery Executive',
+      riderPhone: riderPhone || undefined,
+      riderRemarks: riderRemarks || undefined,
+      evidenceImages: riderEvidence,
+      inspectedAt,
+    };
+  }
+
+  return undefined;
 };
 
 const REASON_CATEGORY_RULES: Array<{ category: string; keywords: string[]; exactOnly?: string[] }> = [
@@ -907,6 +1071,15 @@ const INITIAL_RETURNS: ReturnRequest[] = [
         'https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=800&auto=format&fit=crop&q=80',
       ],
     },
+    riderInspection: {
+      riderName: 'Vikrant Yadav (Delivery Partner)',
+      riderPhone: '+91 98765 43210',
+      riderRemarks: 'Examined at doorstep. Product packaging puffed up, sour smell confirmed. Picked up from customer.',
+      evidenceImages: [
+        'https://images.unsplash.com/photo-1589985270826-4b7bb135bc9d?w=800&auto=format&fit=crop&q=80',
+      ],
+      inspectedAt: '18 Oct 2026, 11:30 AM',
+    },
     refund: {
       amount: 285,
       mode: 'ORIGINAL_PAYMENT',
@@ -991,6 +1164,15 @@ const INITIAL_RETURNS: ReturnRequest[] = [
       images: [
         'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&auto=format&fit=crop&q=80',
       ],
+    },
+    riderInspection: {
+      riderName: 'Farhan Ansari (Zippy Rider)',
+      riderPhone: '+91 98112 34567',
+      riderRemarks: 'Glass rim chip verified in front of customer. Defective jar collected in padded pouch.',
+      evidenceImages: [
+        'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&auto=format&fit=crop&q=80',
+      ],
+      inspectedAt: '17 Oct 2026, 02:15 PM',
     },
     refund: {
       amount: 0,
@@ -1406,6 +1588,7 @@ export default function ReturnsPage() {
 
     if (targetItem) {
       const additionalImages = extractEvidenceList(targetItem, detail, null, selectedReturn.itemId || '');
+      const deepRiderInfo = extractRiderInfo(targetItem, detail, selectedReturn.itemId || '');
 
       const deepProductImg =
         targetItem?.productImage ||
@@ -1461,6 +1644,17 @@ export default function ReturnsPage() {
                 : prev.reason.customerNotes,
             images: mergedImages,
           },
+          riderInspection: deepRiderInfo
+            ? {
+                riderName: deepRiderInfo.riderName || prev.riderInspection?.riderName,
+                riderPhone: deepRiderInfo.riderPhone || prev.riderInspection?.riderPhone,
+                riderRemarks: deepRiderInfo.riderRemarks || prev.riderInspection?.riderRemarks,
+                evidenceImages: Array.from(
+                  new Set([...(prev.riderInspection?.evidenceImages || []), ...(deepRiderInfo.evidenceImages || [])])
+                ),
+                inspectedAt: deepRiderInfo.inspectedAt || prev.riderInspection?.inspectedAt,
+              }
+            : prev.riderInspection,
           review: {
             ...prev.review,
             rejectionReason: targetItem.rejection_reason || detail.rejection_reason || prev.review?.rejectionReason,
@@ -1724,6 +1918,7 @@ export default function ReturnsPage() {
           } = extractReturnReasonInfo(firstItem, r);
 
           const reasonImages: string[] = extractEvidenceList(firstItem, r, rawReason, itemId);
+          const riderInspection = extractRiderInfo(firstItem, r, itemId);
 
           // Refund details: Full payable refund amount (Full order total or API refund amount)
           const payableRefund = Number(
@@ -1857,6 +2052,7 @@ export default function ReturnsPage() {
               customerNotes,
               images: reasonImages,
             },
+            riderInspection,
             refund: {
               amount: payableRefund,
               mode: refundMode,
@@ -1949,26 +2145,31 @@ export default function ReturnsPage() {
   // Actions
   const handleOpenApprove = (r: ReturnRequest) => {
     setSelectedReturn(r);
+    const isExchange = r.type === 'EXCHANGE';
     setApproveForm({
       pickupDate: 'Tomorrow (10:00 AM - 01:00 PM)',
       pickupPartner: 'Zippy Express Logistics',
       inspectionPolicy: 'INSPECT_FIRST',
-      vendorNotes: `Approved for doorstep return inspection. Product: ${r.product.name}`,
+      vendorNotes: isExchange
+        ? `Replacement item verified in stock and packed for delivery partner pickup. Product: ${r.product.name}`
+        : `Approved for doorstep return inspection and admin refund. Product: ${r.product.name}`,
     });
     setIsApproveOpen(true);
   };
 
   const handleConfirmApprove = async () => {
     if (!selectedReturn) return;
+    const isExchange = selectedReturn.type === 'EXCHANGE';
+    const targetStatus: ReturnStatus = isExchange ? 'INSPECTED' : 'APPROVED';
 
     const newTimelineEvent: TimelineEvent = {
       id: `tl-${Date.now()}`,
-      title: 'Return Request Approved by Vendor',
-      description: `Pickup booked with ${approveForm.pickupPartner} for ${approveForm.pickupDate}. Policy: ${
-        approveForm.inspectionPolicy === 'INSTANT_ON_PICKUP' ? 'Instant Refund upon pickup' : 'Inspect at Store first'
-      }. Notes: ${approveForm.vendorNotes || 'None'}`,
+      title: isExchange ? 'Replacement Ready Confirmed by Vendor' : 'Return Request Approved by Vendor',
+      description: isExchange
+        ? `Vendor verified defective item and confirmed replacement product ready. Automatic zero-cost replacement order created for delivery partner.`
+        : `Return claim approved. Forwarded to Admin Refund Queue for disbursal. Logistics: ${approveForm.pickupPartner}.`,
       timestamp: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
-      status: 'APPROVED',
+      status: targetStatus,
       actor: 'VENDOR',
     };
 
@@ -1976,10 +2177,10 @@ export default function ReturnsPage() {
       if (item.id === selectedReturn.id) {
         return {
           ...item,
-          status: 'APPROVED' as ReturnStatus,
+          status: targetStatus,
           pickup: {
             partner: approveForm.pickupPartner,
-            trackingNumber: `ZP-TRK-${Math.floor(100000 + Math.random() * 900000)}`,
+            trackingNumber: item.pickup?.trackingNumber || `ZP-TRK-${Math.floor(100000 + Math.random() * 900000)}`,
             scheduledDate: approveForm.pickupDate,
             timeSlot: 'Morning Slot (10 AM - 1 PM)',
             status: 'SCHEDULED' as const,
@@ -2002,18 +2203,22 @@ export default function ReturnsPage() {
       await updateReturnStatusApi({
         itemId: targetItemId,
         returnId: selectedReturn.returnId || selectedReturn.id,
-        status: 'APPROVED',
+        status: targetStatus,
         remarks: approveForm.vendorNotes,
       }).unwrap();
 
       setReturnsList(updated);
       setIsApproveOpen(false);
-      toast.success(`Request ${selectedReturn.returnNumber} approved successfully! Pickup scheduled.`);
+      if (isExchange) {
+        toast.success(`Exchange ${selectedReturn.returnNumber} confirmed! Replacement order generated.`);
+      } else {
+        toast.success(`Request ${selectedReturn.returnNumber} approved! Forwarded to Admin Refund Queue.`);
+      }
       refetchReturns();
     } catch (e: any) {
-      console.error('Failed to approve return on server:', e);
-      const errMsg = e?.data?.message || e?.message || 'Server error approving return';
-      toast.error(`Approval failed: ${errMsg}`);
+      console.error('Failed to update return on server:', e);
+      const errMsg = e?.data?.message || e?.message || 'Server error updating return';
+      toast.error(`Operation failed: ${errMsg}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -2992,6 +3197,79 @@ export default function ReturnsPage() {
                         <span>No photo proof uploaded by customer</span>
                       </div>
                     )}
+
+                    {/* Delivery Partner (Rider) Inspection & Remarks */}
+                    <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-indigo-950 flex items-center gap-1.5 text-xs">
+                          <Truck className="w-3.5 h-3.5 text-indigo-600" />
+                          Delivery Partner Inspection
+                        </span>
+                        {item.riderInspection?.inspectedAt && (
+                          <span className="text-[10px] text-indigo-700 font-semibold">
+                            {item.riderInspection.inspectedAt}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Rider Contact Info */}
+                      <div className="flex items-center justify-between text-[11px] bg-white/80 px-2.5 py-1.5 rounded-xl border border-indigo-100">
+                        <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                          <User className="w-3 h-3 text-indigo-500" />
+                          {item.riderInspection?.riderName || item.pickup?.partner || 'Assigned Delivery Partner'}
+                        </span>
+                        {item.riderInspection?.riderPhone ? (
+                          <a
+                            href={`tel:${item.riderInspection.riderPhone}`}
+                            className="font-bold text-indigo-700 hover:underline flex items-center gap-1"
+                          >
+                            <Phone className="w-3 h-3 text-indigo-500" />
+                            {item.riderInspection.riderPhone}
+                          </a>
+                        ) : (
+                          <span className="text-slate-400 text-[10px]">Contact on file</span>
+                        )}
+                      </div>
+
+                      {/* Rider Remarks */}
+                      {item.riderInspection?.riderRemarks ? (
+                        <div className="p-2 rounded-xl bg-white/90 border border-indigo-100 text-[11px] text-slate-700 italic">
+                          "{item.riderInspection.riderRemarks}"
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-500 italic">
+                          {['INSPECTED', 'COMPLETED', 'EXCHANGE_DISPATCHED', 'REFUND_COMPLETED'].includes(item.status)
+                            ? 'No text remarks recorded by rider.'
+                            : 'Awaiting doorstep inspection by delivery partner.'}
+                        </div>
+                      )}
+
+                      {/* Rider Evidence Photos Gallery */}
+                      {item.riderInspection?.evidenceImages && item.riderInspection.evidenceImages.length > 0 ? (
+                        <div className="space-y-1 pt-0.5">
+                          <div className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider flex items-center justify-between">
+                            <span>Rider Inspection Photos ({item.riderInspection.evidenceImages.length})</span>
+                            <span className="text-[10px] text-indigo-600 font-extrabold cursor-pointer">Click to inspect</span>
+                          </div>
+                          <div className="flex items-center gap-2 overflow-x-auto py-1">
+                            {item.riderInspection.evidenceImages.map((imgUrl, idx) => (
+                              <EvidenceImage
+                                key={idx}
+                                src={imgUrl}
+                                alt={`Rider Inspection ${idx + 1}`}
+                                className="w-14 h-14 rounded-xl object-cover border border-indigo-200 hover:ring-2 hover:ring-indigo-500 transition-all shadow-2xs"
+                                onClick={(effective) => setLightboxImage(effective)}
+                                showZoomIcon
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-slate-400 italic">
+                          No doorstep inspection photos uploaded yet.
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Right Column: Customer Info & Financial Status (3 cols) */}
@@ -3210,87 +3488,86 @@ export default function ReturnsPage() {
                           onClick={() => handleOpenApprove(item)}
                           className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white text-xs font-black transition-all shadow-md hover:shadow-lg flex items-center gap-1.5"
                         >
-                          <CheckCircle2 className="w-4 h-4" />
-                          Approve Return
+                          {isReturn ? <CheckCircle2 className="w-4 h-4" /> : <ArrowLeftRight className="w-4 h-4" />}
+                          {isReturn ? 'Approve Return (Admin Refund)' : 'Confirm Replacement Ready'}
                         </button>
                       </>
                     )}
 
-                    {/* If APPROVED or PICKUP_SCHEDULED: Doorstep pickup actions */}
-                    {(item.status === 'APPROVED' || item.status === 'PICKUP_SCHEDULED') && (
+                    {/* If APPROVED */}
+                    {item.status === 'APPROVED' && (
+                      <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200">
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        {isReturn ? 'Approved • Forwarded to Admin Refund Queue' : 'Exchange Approved • Awaiting Doorstep Pickup'}
+                      </span>
+                    )}
+
+                    {/* If PICKUP_SCHEDULED */}
+                    {item.status === 'PICKUP_SCHEDULED' && (
+                      <span className="text-xs font-bold text-blue-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200">
+                        <Truck className="w-3.5 h-3.5 text-blue-600" />
+                        Doorstep Pickup Scheduled • Rider Assigned
+                      </span>
+                    )}
+
+                    {/* If PICKED UP: Customer item collected, rider delivering to store */}
+                    {item.status === 'PICKED_UP' && (
                       <>
-                        {item.status === 'APPROVED' && (
+                        <span className="text-xs font-bold text-indigo-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                          <Truck className="w-3.5 h-3.5 text-indigo-600" />
+                          Collected by Rider • En Route to Store
+                        </span>
+                        {!isReturn && (
+                          <button
+                            onClick={() => handleOpenApprove(item)}
+                            className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
+                          >
+                            <ArrowLeftRight className="w-3.5 h-3.5" />
+                            Confirm Replacement Ready
+                          </button>
+                        )}
+                        {isReturn && (
                           <button
                             onClick={() =>
                               handleQuickStatusAdvance(
                                 item,
-                                'PICKUP_SCHEDULED',
-                                'Doorstep Pickup Scheduled',
-                                'Logistics pickup scheduled with delivery courier partner.'
+                                'INSPECTED',
+                                'Parcel Received & Verified at Hub',
+                                'Physical item inspected by store staff. Condition matches customer report.'
                               )
                             }
-                            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
+                            className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
                           >
-                            <Truck className="w-3.5 h-3.5" />
-                            Schedule Doorstep Pickup
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            Mark Received & Inspected
                           </button>
                         )}
-                        <button
-                          onClick={() =>
-                            handleQuickStatusAdvance(
-                              item,
-                              'PICKED_UP',
-                              'Courier Picked Up Parcel',
-                              'Delivery partner received return parcel from customer.'
-                            )
-                          }
-                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          Mark as Picked Up / Received
-                        </button>
                       </>
                     )}
 
-                    {/* If PICKED UP: Allow receiving & marking inspected */}
-                    {item.status === 'PICKED_UP' && (
-                      <button
-                        onClick={() =>
-                          handleQuickStatusAdvance(
-                            item,
-                            'INSPECTED',
-                            'Parcel Received & Verified at Hub',
-                            'Physical item inspected by store staff. Condition matches customer report.'
-                          )
-                        }
-                        className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black transition-all shadow-xs flex items-center gap-1.5"
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        Mark Received & Inspected
-                      </button>
-                    )}
-
-                    {/* If INSPECTED: Issue Refund or Dispatch Exchange */}
+                    {/* If INSPECTED */}
                     {item.status === 'INSPECTED' && (
                       <>
                         {isReturn ? (
-                          <button
-                            onClick={() => handleOpenRefund(item)}
-                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black transition-all shadow-md flex items-center gap-1.5"
-                          >
-                            <DollarSign className="w-4 h-4" />
-                            Issue Refund (₹{item.refund.amount})
-                          </button>
+                          <span className="text-xs font-bold text-purple-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-50 border border-purple-200">
+                            <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+                            Store Inspected • In Admin Refund Queue
+                          </span>
                         ) : (
-                          <button
-                            onClick={() => handleOpenDispatchExchange(item)}
-                            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black transition-all shadow-md flex items-center gap-1.5"
-                          >
-                            <Truck className="w-4 h-4" />
-                            Dispatch Replacement
-                          </button>
+                          <span className="text-xs font-bold text-indigo-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200">
+                            <Package className="w-3.5 h-3.5 text-indigo-600" />
+                            Replacement Order Generated • Awaiting Rider Pickup
+                          </span>
                         )}
                       </>
+                    )}
+
+                    {/* If REJECTED */}
+                    {item.status === 'REJECTED' && (
+                      <span className="text-xs font-bold text-rose-700 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200">
+                        <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                        Declined ({item.review?.rejectionReason || 'Policy Violation'})
+                      </span>
                     )}
 
                     {/* If REFUND_COMPLETED */}
@@ -3324,10 +3601,18 @@ export default function ReturnsPage() {
             <div className="shrink-0 px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-emerald-50/50">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-emerald-100 text-[#167a46]">
-                  <CheckCircle2 className="w-5 h-5" />
+                  {selectedReturn.type === 'EXCHANGE' ? (
+                    <ArrowLeftRight className="w-5 h-5" />
+                  ) : (
+                    <CheckCircle2 className="w-5 h-5" />
+                  )}
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-900">Approve Return Request</h3>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    {selectedReturn.type === 'EXCHANGE'
+                      ? 'Confirm Replacement Ready (Exchange)'
+                      : 'Approve Return Request'}
+                  </h3>
                   <p className="text-xs text-slate-500 font-medium">
                     {selectedReturn.returnNumber} • Order: {selectedReturn.orderId}
                   </p>
@@ -3343,6 +3628,26 @@ export default function ReturnsPage() {
 
             {/* Modal Body */}
             <div className="p-6 space-y-4 flex-1 overflow-y-auto">
+              {/* Guidance Info Banner */}
+              <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-xs text-emerald-950 flex items-start gap-2.5">
+                <Info className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                {selectedReturn.type === 'EXCHANGE' ? (
+                  <div className="space-y-0.5">
+                    <span className="font-extrabold block text-emerald-900">Exchange Replacement Generation</span>
+                    <span>
+                      Confirming this request marks the return item <strong>INSPECTED</strong> and automatically generates a <strong>zero-cost replacement order</strong> on the backend. The assigned delivery partner will collect the fresh replacement product from your store and deliver it to the customer.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    <span className="font-extrabold block text-emerald-900">Admin Refund Forwarding</span>
+                    <span>
+                      Approving this claim marks the status as <strong>APPROVED</strong> and sends the request directly to the <strong>Admin Refund Queue (PENDING_ADMIN)</strong>. The platform admin will review and disburse the refund to the customer's wallet or original payment method.
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {/* Product Mini Banner */}
               <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center space-x-3.5">
                 <img
@@ -3372,6 +3677,54 @@ export default function ReturnsPage() {
                   )}
                 </div>
               </div>
+
+              {/* Delivery Partner Inspection if available */}
+              {selectedReturn.riderInspection && (
+                <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-indigo-950 flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-indigo-600" />
+                      Delivery Partner Inspection Report
+                    </span>
+                    {selectedReturn.riderInspection.inspectedAt && (
+                      <span className="text-[10px] text-indigo-700 font-semibold">
+                        {selectedReturn.riderInspection.inspectedAt}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-700 font-medium">
+                    Executive: <strong>{selectedReturn.riderInspection.riderName}</strong>
+                    {selectedReturn.riderInspection.riderPhone && (
+                      <> • Tel: <a href={`tel:${selectedReturn.riderInspection.riderPhone}`} className="text-indigo-700 font-bold hover:underline">{selectedReturn.riderInspection.riderPhone}</a></>
+                    )}
+                  </div>
+                  {selectedReturn.riderInspection.riderRemarks && (
+                    <p className="text-[11px] text-slate-700 italic bg-white/80 p-2 rounded-xl border border-indigo-100">
+                      "{selectedReturn.riderInspection.riderRemarks}"
+                    </p>
+                  )}
+                  {selectedReturn.riderInspection.evidenceImages && selectedReturn.riderInspection.evidenceImages.length > 0 && (
+                    <div className="pt-1">
+                      <div className="text-[10px] font-bold text-indigo-900 mb-1 flex items-center justify-between">
+                        <span>Rider Inspection Photos ({selectedReturn.riderInspection.evidenceImages.length}):</span>
+                        <span className="text-indigo-600 font-bold">Click to inspect</span>
+                      </div>
+                      <div className="flex items-center gap-2 overflow-x-auto py-1">
+                        {selectedReturn.riderInspection.evidenceImages.map((img, idx) => (
+                          <EvidenceImage
+                            key={idx}
+                            src={img}
+                            alt="Rider inspection proof"
+                            onClick={(effective) => setLightboxImage(effective)}
+                            className="w-12 h-12 rounded-xl object-cover border border-indigo-200 cursor-pointer hover:scale-105 transition-transform shrink-0 shadow-xs"
+                            showZoomIcon
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Customer Stated Reason & Attached Evidence */}
               <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-2">
@@ -3440,7 +3793,7 @@ export default function ReturnsPage() {
 
               {/* Refund Policy Mode */}
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700">Refund Settlement Rule</label>
+                <label className="text-xs font-bold text-slate-700">Settlement Rule</label>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <button
                     type="button"
@@ -3452,7 +3805,7 @@ export default function ReturnsPage() {
                     }`}
                   >
                     <div className="font-extrabold text-slate-900">Inspect First</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">Refund released after warehouse check</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Verify returned item at store</div>
                   </button>
 
                   <button
@@ -3465,7 +3818,7 @@ export default function ReturnsPage() {
                     }`}
                   >
                     <div className="font-extrabold text-slate-900">Instant on Pickup</div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">Fast refund upon rider barcode scan</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Fast-track upon rider doorstep check</div>
                   </button>
                 </div>
               </div>
@@ -3498,10 +3851,18 @@ export default function ReturnsPage() {
               >
                 {isSubmitting ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : selectedReturn.type === 'EXCHANGE' ? (
+                  <ArrowLeftRight className="w-4 h-4" />
                 ) : (
                   <CheckCircle2 className="w-4 h-4" />
                 )}
-                <span>{isSubmitting ? 'Approving on Server...' : 'Confirm & Schedule Pickup'}</span>
+                <span>
+                  {isSubmitting
+                    ? 'Updating on Server...'
+                    : selectedReturn.type === 'EXCHANGE'
+                    ? 'Confirm Replacement Ready (Generate Order)'
+                    : 'Approve Return (Submit to Admin)'}
+                </span>
               </button>
             </div>
           </div>
@@ -3585,6 +3946,9 @@ export default function ReturnsPage() {
                   onChange={(e) => setRejectForm({ ...rejectForm, rejectionReason: e.target.value })}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
                 >
+                  <option value="Item seal tampered by customer">
+                    Item seal tampered by customer
+                  </option>
                   <option value="The item is outside the return policy">
                     The item is outside the return policy
                   </option>
@@ -4067,6 +4431,98 @@ export default function ReturnsPage() {
                     <div className="pt-2 text-[11px] text-slate-500 italic flex items-center gap-1.5">
                       <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <span>No customer proof photos attached for this claim.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Delivery Partner (Rider) Inspection & Field Audit */}
+              <div className="space-y-2.5">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Delivery Partner (Rider) Inspection & Field Report
+                </span>
+                <div className="p-4 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-indigo-950 flex items-center gap-1.5 text-xs">
+                      <Truck className="w-4 h-4 text-indigo-600" />
+                      Field Inspection Status
+                    </span>
+                    {selectedReturn.riderInspection?.inspectedAt && (
+                      <span className="text-[10px] text-indigo-700 font-semibold px-2 py-0.5 rounded-md bg-indigo-100">
+                        {selectedReturn.riderInspection.inspectedAt}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Rider Details & Phone */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 rounded-xl bg-white/90 border border-indigo-100 space-y-0.5">
+                      <span className="text-[10px] text-slate-400 font-bold block">Assigned Executive</span>
+                      <span className="font-extrabold text-slate-800 flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5 text-indigo-500" />
+                        {selectedReturn.riderInspection?.riderName || selectedReturn.pickup?.partner || 'Zippy Express Rider'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-white/90 border border-indigo-100 space-y-0.5">
+                      <span className="text-[10px] text-slate-400 font-bold block">Contact Number</span>
+                      {selectedReturn.riderInspection?.riderPhone ? (
+                        <a
+                          href={`tel:${selectedReturn.riderInspection.riderPhone}`}
+                          className="font-extrabold text-indigo-700 hover:underline flex items-center gap-1.5"
+                        >
+                          <Phone className="w-3.5 h-3.5 text-indigo-500" />
+                          {selectedReturn.riderInspection.riderPhone}
+                        </a>
+                      ) : (
+                        <span className="font-bold text-slate-500 flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-slate-400" />
+                          Available via Dispatch
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Rider Remarks */}
+                  {selectedReturn.riderInspection?.riderRemarks ? (
+                    <div className="space-y-1">
+                      <span className="text-[10px] text-indigo-900 font-bold block">Inspection Remarks:</span>
+                      <p className="p-3 rounded-xl bg-white/90 border border-indigo-100 text-slate-700 italic leading-relaxed">
+                        "{selectedReturn.riderInspection.riderRemarks}"
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 rounded-xl bg-white/60 border border-indigo-100 text-[11px] text-slate-500 italic">
+                      {['INSPECTED', 'COMPLETED', 'EXCHANGE_DISPATCHED', 'REFUND_COMPLETED'].includes(selectedReturn.status)
+                        ? 'No written remarks recorded during inspection.'
+                        : 'Awaiting doorstep inspection by assigned delivery partner.'}
+                    </div>
+                  )}
+
+                  {/* Rider Evidence Photos */}
+                  {selectedReturn.riderInspection?.evidenceImages && selectedReturn.riderInspection.evidenceImages.length > 0 ? (
+                    <div className="space-y-1 pt-1 border-t border-indigo-100">
+                      <div className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider flex items-center justify-between">
+                        <span>Rider Inspection Photos ({selectedReturn.riderInspection.evidenceImages.length})</span>
+                        <span className="text-[10px] text-indigo-600 font-extrabold cursor-pointer">Click to inspect</span>
+                      </div>
+                      <div className="flex items-center gap-2 overflow-x-auto py-1">
+                        {selectedReturn.riderInspection.evidenceImages.map((imgUrl, idx) => (
+                          <EvidenceImage
+                            key={idx}
+                            src={imgUrl}
+                            alt={`Rider Inspection ${idx + 1}`}
+                            className="w-16 h-16 rounded-xl object-cover border border-indigo-200 hover:ring-2 hover:ring-indigo-500 transition-all shadow-xs"
+                            onClick={(effective) => setLightboxImage(effective)}
+                            showZoomIcon
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 italic flex items-center gap-1.5 pt-1">
+                      <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span>No doorstep photos uploaded yet by rider.</span>
                     </div>
                   )}
                 </div>
