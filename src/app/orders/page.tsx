@@ -31,28 +31,19 @@ const ALLOWED_ORDER_TRANSITIONS: Record<string, Array<{ value: string; label: st
   PENDING: [
     { value: 'CONFIRMED', label: 'CONFIRMED (Accept Order)' },
     { value: 'REJECTED', label: 'REJECTED (Decline Order)' },
-    { value: 'CANCELLED', label: 'CANCELLED' },
   ],
   NEW: [
     { value: 'CONFIRMED', label: 'CONFIRMED (Accept Order)' },
     { value: 'REJECTED', label: 'REJECTED (Decline Order)' },
-    { value: 'CANCELLED', label: 'CANCELLED' },
   ],
   CONFIRMED: [
     { value: 'PREPARING', label: 'PREPARING (Start Preparing)' },
-    { value: 'CANCELLED', label: 'CANCELLED' },
   ],
   PREPARING: [
     { value: 'READY_FOR_PICKUP', label: 'READY_FOR_PICKUP (Mark Ready for Pickup)' },
   ],
   PACKING: [
     { value: 'READY_FOR_PICKUP', label: 'READY_FOR_PICKUP (Mark Ready for Pickup)' },
-  ],
-  READY_FOR_PICKUP: [
-    { value: 'OUT_FOR_DELIVERY', label: 'OUT_FOR_DELIVERY (Handover to Rider)' },
-  ],
-  OUT_FOR_DELIVERY: [
-    { value: 'DELIVERED', label: 'DELIVERED (Mark Delivered)' },
   ],
 };
 
@@ -242,7 +233,7 @@ export default function OrdersPage() {
     if (currentStatus) {
       const allowedValues = (ALLOWED_ORDER_TRANSITIONS[currentStatus] || []).map((t) => t.value);
       if (!allowedValues.includes(nextStatus.toUpperCase())) {
-        const errMsg = `Invalid order status transition from ${currentStatus} to ${nextStatus}.`;
+        const errMsg = `Vendor action restricted: Cannot transition order from ${currentStatus} to ${nextStatus}. Subsequent delivery steps are handled exclusively by the delivery partner.`;
         setActionError(errMsg);
         toast.error(errMsg);
         return false;
@@ -549,31 +540,30 @@ export default function OrdersPage() {
                     )}
 
                     {order.status === 'READY_FOR_PICKUP' && (
-                      <button
-                        disabled={isUpdatingStatus}
-                        onClick={() => handleStatusChange(order.id, 'OUT_FOR_DELIVERY', 'Handed over to delivery agent')}
-                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
-                      >
-                        <span>Handover / Out for Delivery</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
+                      <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 flex items-center space-x-1.5 shadow-2xs">
+                        <Package className="w-4 h-4 text-indigo-600" />
+                        <span>Ready for Pickup • Awaiting Delivery Partner</span>
+                      </span>
                     )}
 
                     {order.status === 'OUT_FOR_DELIVERY' && (
-                      <button
-                        disabled={isUpdatingStatus}
-                        onClick={() => handleStatusChange(order.id, 'DELIVERED', 'Order delivered successfully')}
-                        className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
-                      >
-                        <span>Mark Delivered</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
+                      <span className="text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200 flex items-center space-x-1.5 shadow-2xs">
+                        <Clock className="w-4 h-4 text-purple-600 animate-pulse" />
+                        <span>Out for Delivery • Delivery Partner in Transit</span>
+                      </span>
                     )}
 
                     {(order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
                       <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center space-x-1">
                         <CheckCircle2 className="w-4 h-4" />
                         <span>Order Completed</span>
+                      </span>
+                    )}
+
+                    {(order.status === 'REJECTED' || order.status === 'CANCELLED') && (
+                      <span className="text-xs font-bold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-200 flex items-center space-x-1">
+                        <XCircle className="w-4 h-4 text-rose-600" />
+                        <span>Order {order.status === 'REJECTED' ? 'Rejected' : 'Cancelled'}</span>
                       </span>
                     )}
                   </div>
@@ -635,11 +625,29 @@ export default function OrdersPage() {
                   <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Update Order Status</h4>
 
                   {allowedModalTransitions.length === 0 ? (
-                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 flex items-center space-x-2">
-                      <CheckCircle2 className="w-4 h-4 text-[#167a46] shrink-0" />
-                      <span>
-                        Order is in terminal status (<span className="font-bold text-slate-900">{currentModalStatus}</span>). No further status updates are allowed.
-                      </span>
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600 flex items-center space-x-2.5">
+                      {currentModalStatus === 'READY_FOR_PICKUP' ? (
+                        <>
+                          <Package className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span className="text-indigo-900">
+                            Order is <strong>Ready for Pickup</strong>. The delivery partner will pick up the parcel from your store and manage subsequent delivery stages.
+                          </span>
+                        </>
+                      ) : currentModalStatus === 'OUT_FOR_DELIVERY' ? (
+                        <>
+                          <Clock className="w-4 h-4 text-purple-600 shrink-0 animate-pulse" />
+                          <span className="text-purple-900">
+                            Order is <strong>Out for Delivery</strong> with the delivery partner. Final delivery completion is updated by the delivery partner.
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-[#167a46] shrink-0" />
+                          <span>
+                            Order has reached final status (<span className="font-bold text-slate-900">{currentModalStatus}</span>). No further vendor status updates are required.
+                          </span>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <>
