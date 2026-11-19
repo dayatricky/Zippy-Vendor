@@ -18,6 +18,7 @@ import {
   RefreshCw,
   AlertCircle,
   FileText,
+  Loader2,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import {
@@ -55,6 +56,8 @@ export default function OrdersPage() {
   const [modalNextStatus, setModalNextStatus] = useState<string>('');
   const [statusRemarks, setStatusRemarks] = useState<string>('');
   const [actionError, setActionError] = useState<string>('');
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [updatingAction, setUpdatingAction] = useState<string | null>(null);
 
   // 1. Fetch Orders List via RTK Query matching Swagger (/vendor/orders)
   const {
@@ -240,6 +243,9 @@ export default function OrdersPage() {
       }
     }
 
+    setUpdatingOrderId(orderId);
+    setUpdatingAction(nextStatus);
+
     try {
       await updateOrderStatusApi({
         orderId,
@@ -264,6 +270,9 @@ export default function OrdersPage() {
       setActionError(msg);
       toast.error(msg);
       return false;
+    } finally {
+      setUpdatingOrderId(null);
+      setUpdatingAction(null);
     }
   };
 
@@ -500,42 +509,76 @@ export default function OrdersPage() {
                     {(order.status === 'PENDING' || order.status === 'NEW') && (
                       <>
                         <button
-                          disabled={isUpdatingStatus}
+                          disabled={isUpdatingStatus || updatingOrderId === order.id}
                           onClick={() => handleStatusChange(order.id, 'REJECTED', 'Rejected by store team')}
-                          className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-bold text-xs transition-all cursor-pointer"
+                          className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-bold text-xs transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
                         >
-                          Reject
+                          {updatingOrderId === order.id && updatingAction === 'REJECTED' ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Rejecting...</span>
+                            </>
+                          ) : (
+                            <span>Reject</span>
+                          )}
                         </button>
                         <button
-                          disabled={isUpdatingStatus}
+                          disabled={isUpdatingStatus || updatingOrderId === order.id}
                           onClick={() => handleStatusChange(order.id, 'CONFIRMED', 'Accepted by store team')}
-                          className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
+                          className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                          <span>Accept & Confirm</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
+                          {updatingOrderId === order.id && updatingAction === 'CONFIRMED' ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Accepting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Accept & Confirm</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </>
+                          )}
                         </button>
                       </>
                     )}
 
                     {order.status === 'CONFIRMED' && (
                       <button
-                        disabled={isUpdatingStatus}
+                        disabled={isUpdatingStatus || updatingOrderId === order.id}
                         onClick={() => handleStatusChange(order.id, 'PREPARING', 'Order packaging in progress')}
-                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
+                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        <span>Start Preparing</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
+                        {updatingOrderId === order.id && updatingAction === 'PREPARING' ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Preparing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Start Preparing</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
                       </button>
                     )}
 
                     {(order.status === 'PREPARING' || order.status === 'PACKING') && (
                       <button
-                        disabled={isUpdatingStatus}
+                        disabled={isUpdatingStatus || updatingOrderId === order.id}
                         onClick={() => handleStatusChange(order.id, 'READY_FOR_PICKUP', 'Order packed and ready for delivery agent')}
-                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
+                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black text-xs transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        <span>Mark Ready for Pickup</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
+                        {updatingOrderId === order.id && updatingAction === 'READY_FOR_PICKUP' ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Marking Ready...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Mark Ready for Pickup</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </>
+                        )}
                       </button>
                     )}
 
@@ -687,7 +730,7 @@ export default function OrdersPage() {
 
                       <div className="pt-2 flex justify-end">
                         <button
-                          disabled={isUpdatingStatus || !modalNextStatus}
+                          disabled={isUpdatingStatus || updatingOrderId === selectedOrderId || !modalNextStatus}
                           onClick={async () => {
                             if (!modalNextStatus) return;
                             const ok = await handleStatusChange(
@@ -700,9 +743,16 @@ export default function OrdersPage() {
                               setSelectedOrderId(null);
                             }
                           }}
-                          className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] disabled:opacity-60 text-white font-bold text-xs shadow-xs cursor-pointer"
+                          className="px-4 py-2 rounded-xl bg-[#167a46] hover:bg-[#12653a] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs shadow-xs cursor-pointer flex items-center space-x-1.5"
                         >
-                          {isUpdatingStatus ? 'Updating...' : 'Update Status'}
+                          {isUpdatingStatus || updatingOrderId === selectedOrderId ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Updating Status...</span>
+                            </>
+                          ) : (
+                            <span>Update Status</span>
+                          )}
                         </button>
                       </div>
                     </>
