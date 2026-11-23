@@ -24,6 +24,10 @@ import {
   XCircle,
   Check,
   Lock,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 import { useVendorStore } from '@/store/useVendorStore';
 import {
@@ -157,6 +161,9 @@ export default function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'INACTIVE' | 'REJECTED'>('ALL');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const productsListTopRef = useRef<HTMLDivElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -172,6 +179,11 @@ export default function ProductsPage() {
     query?: string;
     results: any[];
   } | null>(null);
+
+  // Reset to page 1 whenever search, category, or status filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory, statusFilter, mcpSearchResults]);
 
   // Search execution states
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -419,7 +431,11 @@ export default function ProductsPage() {
     isFetching: isProductsFetching,
     error: productsError,
     refetch: refetchProducts,
-  } = useGetProductsQuery({ search: searchTerm });
+  } = useGetProductsQuery({
+    search: searchTerm.trim() ? searchTerm.trim() : undefined,
+    page: currentPage,
+    limit: pageSize,
+  });
   const { data: categoriesApiData, refetch: refetchCategories } = useGetCategoriesQuery();
 
   const handleClearSearchFilter = () => {
@@ -427,6 +443,7 @@ export default function ProductsPage() {
     setSearchTerm('');
     setSelectedCategory('All');
     setStatusFilter('ALL');
+    setCurrentPage(1);
     try {
       refetchProducts();
     } catch {}
@@ -772,6 +789,88 @@ export default function ProductsPage() {
         rawItemData: p,
       }));
   }, [mcpSearchResults, displayProducts, selectedCategory, statusFilter, searchTerm]);
+
+  // Safely extract backend pagination metadata if returned by server
+  const totalBackendItems = useMemo(() => {
+    if (!productsApiData) return 0;
+    const rawData = (productsApiData as any)?.data || productsApiData;
+    const count =
+      rawData?.total ??
+      rawData?.totalItems ??
+      rawData?.total_items ??
+      rawData?.count ??
+      rawData?.totalCount ??
+      rawData?.pagination?.total ??
+      rawData?.meta?.total ??
+      0;
+    return Number(count) || 0;
+  }, [productsApiData]);
+
+  const totalEffectiveItems = useMemo(() => {
+    if (mcpSearchResults !== null) {
+      return displayedProductsList.length;
+    }
+    if (selectedCategory !== 'All' || statusFilter !== 'ALL' || searchTerm.trim()) {
+      return Math.max(
+        displayedProductsList.length,
+        totalBackendItems > 0 && selectedCategory === 'All' && statusFilter === 'ALL' && !searchTerm.trim()
+          ? totalBackendItems
+          : displayedProductsList.length
+      );
+    }
+    return totalBackendItems > 0 ? Math.max(totalBackendItems, displayProducts.length) : displayProducts.length;
+  }, [mcpSearchResults, displayedProductsList.length, totalBackendItems, selectedCategory, statusFilter, searchTerm, displayProducts.length]);
+
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(totalEffectiveItems / pageSize));
+  }, [totalEffectiveItems, pageSize]);
+
+  // Auto-clamp page if currentPage exceeds totalPages
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginatedProductsList = useMemo(() => {
+    // If displayedProductsList has more items than pageSize, slice it client-side
+    if (displayedProductsList.length > pageSize) {
+      const startIndex = (currentPage - 1) * pageSize;
+      return displayedProductsList.slice(startIndex, startIndex + pageSize);
+    }
+    return displayedProductsList;
+  }, [displayedProductsList, currentPage, pageSize]);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || newPage === currentPage) return;
+    setCurrentPage(newPage);
+    if (productsListTopRef.current) {
+      productsListTopRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const handlePageSizeChange = (newSize: number) => {
+    setPageSize(newSize);
+    setCurrentPage(1);
+  };
+
+  const startItemIndex = totalEffectiveItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endItemIndex = totalEffectiveItems === 0
+    ? 0
+    : Math.min((currentPage - 1) * pageSize + paginatedProductsList.length, totalEffectiveItems);
+
+  const getPageNumbers = () => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    if (currentPage <= 4) {
+      return [1, 2, 3, 4, 5, '...', totalPages];
+    }
+    if (currentPage >= totalPages - 3) {
+      return [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    }
+    return [1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages];
+  };
 
   const isUUID = (str?: string) => Boolean(str && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str));
 
@@ -1413,7 +1512,7 @@ export default function ProductsPage() {
           >
             <span>All Products</span>
             <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${statusFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              {displayProducts.length}
+              {totalEffectiveItems}
             </span>
           </button>
 
@@ -1565,6 +1664,7 @@ export default function ProductsPage() {
       </div>
 
       {/* Products Grid */}
+      <div ref={productsListTopRef} />
       {isProductsLoading ? (
         <div className="p-16 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
           <RefreshCw className="w-8 h-8 text-[#167a46] animate-spin mx-auto" />
@@ -1606,8 +1706,16 @@ export default function ProductsPage() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {displayedProductsList.map((product) => (
+        <div className="space-y-6">
+          {isProductsFetching && (
+            <div className="flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-2xl border border-emerald-200 shadow-xs animate-pulse">
+              <Loader2 className="w-4 h-4 animate-spin text-[#167a46]" />
+              <span>Fetching products for page {currentPage}...</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {paginatedProductsList.map((product) => (
             <div
               key={product.id}
               className={`white-card p-5 space-y-4 relative overflow-hidden transition-all flex flex-col justify-between shadow-sm border ${
@@ -1784,6 +1892,121 @@ export default function ProductsPage() {
               </div>
             </div>
           ))}
+          </div>
+
+          {/* Pagination Controls Bar */}
+          {displayedProductsList.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
+              {/* Left: Range and Info */}
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                <div>
+                  Showing <span className="font-bold text-slate-900">{startItemIndex}</span> to{' '}
+                  <span className="font-bold text-slate-900">{endItemIndex}</span> of{' '}
+                  <span className="font-bold text-slate-900">{totalEffectiveItems}</span> products
+                </div>
+
+                <div className="h-4 w-px bg-slate-200 hidden sm:block" />
+
+                {/* Per-Page Selector */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500 font-medium">Items per page:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                    className="bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-lg px-2.5 py-1 outline-none focus:border-[#167a46] focus:ring-1 focus:ring-[#167a46] transition-all cursor-pointer"
+                  >
+                    <option value={20}>20</option>
+                    <option value={50}>50 (Default)</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                {isProductsFetching && (
+                  <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                    <Loader2 className="w-3 h-3 animate-spin text-[#167a46]" />
+                    Updating...
+                  </span>
+                )}
+              </div>
+
+              {/* Right: Navigation Buttons */}
+              <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                {/* First Page */}
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1 || isProductsFetching}
+                  title="First Page"
+                  className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                >
+                  <ChevronsLeft className="w-4 h-4" />
+                </button>
+
+                {/* Prev Page */}
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1 || isProductsFetching}
+                  className="flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span className="hidden sm:inline">Prev</span>
+                </button>
+
+                {/* Page Numbers */}
+                <div className="flex items-center gap-1">
+                  {getPageNumbers().map((p, idx) => {
+                    if (p === '...') {
+                      return (
+                        <span key={`ellipsis-${idx}`} className="px-2 text-xs font-bold text-slate-400 select-none">
+                          ...
+                        </span>
+                      );
+                    }
+                    const pageNum = Number(p);
+                    const isActive = pageNum === currentPage;
+                    return (
+                      <button
+                        key={`page-${pageNum}`}
+                        type="button"
+                        onClick={() => handlePageChange(pageNum)}
+                        disabled={isProductsFetching}
+                        className={`min-w-9 h-9 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
+                          isActive
+                            ? 'bg-[#167a46] text-white shadow-sm font-black'
+                            : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Next Page */}
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages || isProductsFetching}
+                  className="flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                >
+                  <span className="hidden sm:inline">Next</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+
+                {/* Last Page */}
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages || isProductsFetching}
+                  title="Last Page"
+                  className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                >
+                  <ChevronsRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
